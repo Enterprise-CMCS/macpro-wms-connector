@@ -1,0 +1,13 @@
+node_modules/
+package-lock.json
+lib/
+cdk.out/
+.cursor/
+cdk.context.json
+*.js
+!jest.config.js
+*.d.ts
+*.tsbuildinfo
+.env
+.env.*
+.DS_Store

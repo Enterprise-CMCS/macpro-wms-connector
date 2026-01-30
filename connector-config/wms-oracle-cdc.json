@@ -1,0 +1,19 @@
+{
+  "name": "wms-oracle-cdc",
+  "config": {
+    "connector.class": "io.debezium.connector.oracle.OracleConnector",
+    "tasks.max": "1",
+    "database.hostname": "<from dbInfo secret: ip>",
+    "database.port": "<from dbInfo secret: port>",
+    "database.user": "<from dbInfo secret: user>",
+    "database.password": "<from dbInfo secret: password>",
+    "database.dbname": "<from dbInfo secret: db>",
+    "database.server.name": "wms",
+    "schema.include.list": "MMDL,WMS",
+    "table.include.list": "MMDL.PLAN_BASE_WVR_TBL,MMDL.PLAN_WVR_RVSN_TBL,WMS.PLAN_BASE_WVR_TBL,WMS.PLAN_WVR_RVSN_TBL",
+    "database.history.kafka.bootstrap.servers": "<from brokerString secret>",
+    "database.history.kafka.topic": "wms.schema-changes",
+    "include.schema.changes": "true",
+    "snapshot.mode": "initial"
+  }
+}

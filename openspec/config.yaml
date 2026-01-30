@@ -1,0 +1,67 @@
+schema: spec-driven
+
+context: |
+  Project: macpro-wms-connector
+  Purpose: Stream WMS Oracle database changes to BigMAC Kafka cluster via CDC
+
+  IMPORTANT: This is a CDC-only implementation. We are NOT modifying the Java
+  application to add Kafka producers. All data capture happens via Debezium
+  reading Oracle redo logs.
+
+  Tech Stack:
+  - Infrastructure: AWS CDK (TypeScript), ECS Fargate
+  - CDC: Debezium Oracle Connector via Kafka Connect
+  - Database: Oracle 11g+ with LogMiner
+  - Target: BigMAC MSK Kafka cluster
+  - AWS Services: ECS, Lambda, SNS, KMS, CloudWatch, Secrets Manager
+
+  Database Details:
+  - Schemas: WMS, MMDL (both contain target tables)
+  - Target Tables: PLAN_BASE_WVR_TBL, PLAN_WVR_RVSN_TBL
+  - CDC User: Dedicated Oracle user with LogMiner privileges
+
+  Environment/Stage Strategy:
+  - Environments: main (dev environment, current branch), val, production
+  - Ephemeral branches: Use stage name for namespacing (e.g., feature-xyz)
+  - Service prefix pattern: wms-connector-{stage}
+  - Secrets path pattern: wms/{stage}/... with fallback to wms/default/...
+
+  Topic Namespacing:
+  - Higher environments (dev/val/prod): No namespace prefix
+    - wms.MMDL.PLAN_BASE_WVR_TBL
+    - wms.MMDL.PLAN_WVR_RVSN_TBL
+  - Ephemeral branches: Use topicNamespace for isolation
+    - {stage}.wms.MMDL.PLAN_BASE_WVR_TBL
+  - Kafka Connect internal topics: mgmt.connect.wms-connector-{stage}.*
+
+  Architecture Pattern:
+  Oracle DB -> LogMiner -> Debezium Connector -> Kafka Connect (ECS Fargate) -> BigMAC MSK
+
+  Reference Implementation:
+  - ../macpro-appian-connector (CDK patterns, ECS setup, environment config)
+  - ../bigmac (MSK infrastructure, topic management)
+  - ./docs/wms-config-details.md (Oracle CDC setup, Debezium config)
+
+rules:
+  proposal:
+    - Explain CDC-only approach (no Java app modifications)
+    - Document Oracle prerequisites (supplemental logging, CDC user)
+    - Define topic naming with environment/stage awareness
+    - Address ephemeral branch isolation strategy
+  specs:
+    - Use GIVEN/WHEN/THEN format for CDC scenarios
+    - Include initial snapshot behavior
+    - Define error handling for LogMiner failures
+    - Specify per-environment resource sizing (dev vs val vs prod)
+    - Include ephemeral branch lifecycle scenarios
+  design:
+    - Follow CDK patterns from macpro-appian-connector
+    - Use environment-config.ts pattern for stage-based configuration
+    - Implement secrets fallback pattern (wms/{stage}/... -> wms/default/...)
+    - Include security group rules for Oracle (1521) and Kafka
+    - Design for ephemeral branch topic cleanup
+  tasks:
+    - Group by: Oracle prep, Infrastructure, Connector config, Monitoring
+    - Include Oracle DBA coordination steps
+    - Include per-environment deployment verification
+    - Include ephemeral branch cleanup procedures
