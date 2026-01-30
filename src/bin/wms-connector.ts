@@ -5,7 +5,7 @@ import { WmsConnectorStack } from '../cdk/wms-connector-stack';
 const app = new cdk.App();
 const stage = (app.node.tryGetContext('stage') as string) || 'main';
 
-new WmsConnectorStack(app, `WmsConnectorStack-${stage}`, {
+new WmsConnectorStack(app, `wms-connector-${stage}`, {
   stage,
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
