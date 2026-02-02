@@ -13,7 +13,7 @@ export interface WmsConnectorStackProps extends cdk.StackProps {
  * CDK stack for WMS Kafka Connect on ECS Fargate.
  * Service prefix: wms-connector-{stage}.
  * brokerString and dbInfo are resolved at runtime by the container using STAGE and
- * getSecretWithFallback(wms/{stage}/..., wms/default/...); task role can read wms/*.
+ * getSecretWithFallback(mmdl/{stage}/..., mmdl/default/...); task role can read mmdl/*.
  */
 export class WmsConnectorStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: WmsConnectorStackProps) {
@@ -56,7 +56,7 @@ export class WmsConnectorStack extends cdk.Stack {
           cdk.Stack.of(this).formatArn({
             service: 'secretsmanager',
             resource: 'secret',
-            resourceName: 'wms/*',
+            resourceName: 'mmdl/*',
             arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
           }),
         ],

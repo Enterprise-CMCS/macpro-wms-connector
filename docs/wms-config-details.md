@@ -200,12 +200,12 @@ If you also want the application to produce events directly (alongside CDC):
 
 ## Secrets Manager (AWS)
 
-The connector resolves secrets using a **stage-first, then default** pattern. Look up `wms/{stage}/<secret-name>` first; if missing, use `wms/default/<secret-name>`.
+The connector resolves secrets using a **stage-first, then default** pattern. Look up `mmdl/{stage}/<secret-name>` first; if missing, use `mmdl/default/<secret-name>`.
 
 | Secret name   | Paths                                                                 | Purpose |
 |---------------|-----------------------------------------------------------------------|---------|
-| **brokerString** | `wms/{stage}/brokerString` → `wms/default/brokerString`               | MSK bootstrap broker string for Kafka Connect. Default is available for main, val, production; stage-specific overrides when a different cluster is used. |
-| **dbInfo**    | `wms/{stage}/dbInfo` → `wms/default/dbInfo`                            | Oracle connection details. JSON object with fields required by the Debezium Oracle connector (e.g., host/IP, port, db/service name, user, password, schema). Create or verify these secrets per environment when CDC credentials are available. |
+| **brokerString** | `mmdl/{stage}/brokerString` → `mmdl/default/brokerString`               | MSK bootstrap broker string for Kafka Connect. Default is available for main, val, production; stage-specific overrides when a different cluster is used. |
+| **dbInfo**    | `mmdl/{stage}/dbInfo` → `mmdl/default/dbInfo`                            | Oracle connection details. JSON object with fields required by the Debezium Oracle connector (e.g., host/IP, port, db/service name, user, password, schema). Create or verify these secrets per environment when CDC credentials are available. |
 
 Example **dbInfo** JSON shape (align with Debezium Oracle connector and Appian DbConfig where applicable):
 

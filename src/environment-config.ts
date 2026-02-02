@@ -2,13 +2,13 @@ import { SecretsManager } from 'aws-sdk';
 
 /**
  * Secret path patterns for AWS Secrets Manager.
- * Fallback pattern: wms/{stage}/... -> wms/default/...
+ * Fallback pattern: mmdl/{stage}/... -> mmdl/default/...
  */
 export const SecretPaths = {
-  brokerString: (stage: string) => `wms/${stage}/brokerString`,
-  brokerStringDefault: 'wms/default/brokerString',
-  dbInfo: (stage: string) => `wms/${stage}/dbInfo`,
-  dbInfoDefault: 'wms/default/dbInfo',
+  brokerString: (stage: string) => `mmdl/${stage}/brokerString`,
+  brokerStringDefault: 'mmdl/default/brokerString',
+  dbInfo: (stage: string) => `mmdl/${stage}/dbInfo`,
+  dbInfoDefault: 'mmdl/default/dbInfo',
 } as const;
 
 /**
@@ -170,7 +170,7 @@ export async function getSecretWithFallback(
 
 /**
  * Load secrets for an environment.
- * Uses fallback pattern: wms/{stage}/... -> wms/default/...
+ * Uses fallback pattern: mmdl/{stage}/... -> mmdl/default/...
  */
 export async function loadEnvironmentSecrets(stage: string): Promise<{
   brokerString: string;
