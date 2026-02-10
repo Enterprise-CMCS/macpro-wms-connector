@@ -5,11 +5,28 @@ import { SecretsManager } from 'aws-sdk';
  * Fallback pattern: mmdl/{stage}/... -> mmdl/default/...
  */
 export const SecretPaths = {
+  vpc: (stage: string) => `mmdl/${stage}/vpc`,
+  vpcDefault: 'mmdl/default/vpc',
+  iamPath: (stage: string) => `mmdl/${stage}/iam/path`,
+  iamPathDefault: 'mmdl/default/iam/path',
+  iamPermissionsBoundary: (stage: string) => `mmdl/${stage}/iam/permissionsBoundary`,
+  iamPermissionsBoundaryDefault: 'mmdl/default/iam/permissionsBoundary',
   brokerString: (stage: string) => `mmdl/${stage}/brokerString`,
   brokerStringDefault: 'mmdl/default/brokerString',
   dbInfo: (stage: string) => `mmdl/${stage}/dbInfo`,
   dbInfoDefault: 'mmdl/default/dbInfo',
 } as const;
+
+/**
+ * VPC configuration structure from Secrets Manager.
+ * Same shape as appian-connector for consistency.
+ */
+export interface VpcConfig {
+  id: string;
+  dataSubnets: string[];
+  privateSubnets: string[];
+  publicSubnets: string[];
+}
 
 /**
  * Database configuration structure from Secrets Manager (Oracle).
@@ -86,8 +103,11 @@ export interface EnvironmentConfig {
  * Secrets are resolved at synth-time from AWS Secrets Manager.
  */
 export interface FullEnvironmentConfig extends EnvironmentConfig {
+  vpc: VpcConfig;
   brokerString: string;
   dbInfo: DbInfo;
+  iamPath: string;
+  iamPermissionsBoundary: string;
 }
 
 /**
@@ -173,16 +193,28 @@ export async function getSecretWithFallback(
  * Uses fallback pattern: mmdl/{stage}/... -> mmdl/default/...
  */
 export async function loadEnvironmentSecrets(stage: string): Promise<{
+  vpc: VpcConfig;
   brokerString: string;
   dbInfo: DbInfo;
+  iamPath: string;
+  iamPermissionsBoundary: string;
 }> {
-  const [brokerString, dbInfoJson] = await Promise.all([
+  const [vpcJson, brokerString, dbInfoJson, iamPath, iamPermissionsBoundary] = await Promise.all([
+    getSecretWithFallback(SecretPaths.vpc(stage), SecretPaths.vpcDefault),
     getSecretWithFallback(SecretPaths.brokerString(stage), SecretPaths.brokerStringDefault),
     getSecretWithFallback(SecretPaths.dbInfo(stage), SecretPaths.dbInfoDefault),
+    getSecretWithFallback(SecretPaths.iamPath(stage), SecretPaths.iamPathDefault),
+    getSecretWithFallback(
+      SecretPaths.iamPermissionsBoundary(stage),
+      SecretPaths.iamPermissionsBoundaryDefault
+    ),
   ]);
   return {
+    vpc: JSON.parse(vpcJson) as VpcConfig,
     brokerString,
     dbInfo: JSON.parse(dbInfoJson) as DbInfo,
+    iamPath,
+    iamPermissionsBoundary,
   };
 }
 

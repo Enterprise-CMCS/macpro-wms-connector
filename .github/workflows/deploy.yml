@@ -1,13 +1,11 @@
 name: Deploy
 
-# TODO: Uncomment once database credentials are configured in Secrets Manager
-# on:
-#   push:
-#     branches:
-#       - main
-#       - val
-#       - production
-on: workflow_dispatch  # Manual trigger only until secrets are ready
+on:
+  push:
+    branches:
+      - main
+      - val
+      - production
 
 concurrency:
   group: ${{ github.ref_name }}-group
@@ -57,4 +55,4 @@ jobs:
         run: yarn build
 
       - name: Deploy with CDK
-        run: npx cdk deploy wms-connector-$STAGE_NAME --require-approval never
+        run: npx cdk deploy wms-connector-$STAGE_NAME -c stage=$STAGE_NAME --require-approval never
