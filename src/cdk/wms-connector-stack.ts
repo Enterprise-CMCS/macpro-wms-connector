@@ -1,8 +1,12 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as cr from 'aws-cdk-lib/custom-resources';
+import * as lambdaNodejs from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Construct } from 'constructs';
 import { FullEnvironmentConfig, NAMED_STAGES, validateStage } from '../environment-config';
 
@@ -33,7 +37,8 @@ export class WmsConnectorStack extends cdk.Stack {
     const vpc = ec2.Vpc.fromVpcAttributes(this, 'Vpc', {
       vpcId: vpcConfig.id,
       availabilityZones,
-      privateSubnetIds: vpcConfig.privateSubnets.length > 0 ? vpcConfig.privateSubnets : vpcConfig.dataSubnets,
+      // Prefer data subnets for DB connectivity (on-prem/TGW paths are often scoped to those ranges).
+      privateSubnetIds: vpcConfig.dataSubnets.length > 0 ? vpcConfig.dataSubnets : vpcConfig.privateSubnets,
     });
 
     const cluster = new ecs.Cluster(this, 'Cluster', {
@@ -68,6 +73,18 @@ export class WmsConnectorStack extends cdk.Stack {
             arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
           }),
         ],
+      })
+    );
+    taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'ssmmessages:CreateControlChannel',
+          'ssmmessages:CreateDataChannel',
+          'ssmmessages:OpenControlChannel',
+          'ssmmessages:OpenDataChannel',
+        ],
+        resources: ['*'],
       })
     );
 
@@ -105,45 +122,59 @@ export class WmsConnectorStack extends cdk.Stack {
     });
 
     const container = taskDef.addContainer('connect', {
-      image: ecs.ContainerImage.fromRegistry('debezium/connect:2.5'),
+      image: ecs.ContainerImage.fromRegistry('confluentinc/cp-kafka-connect:6.0.9'),
+      user: '0',
       memoryLimitMiB: fullConfig.connectContainerMemory,
       cpu: fullConfig.connectContainerCpu,
       logging: ecs.LogDrivers.awsLogs({
         logGroup: connectLogGroup,
         streamPrefix: `wms-connector-${stage}`,
       }),
+      command: [
+        'bash',
+        '-c',
+        [
+          'set -euo pipefail',
+          // Discover the task ENI IP and ensure Connect advertises it in distributed mode.
+          'ENI_IP=$(curl -s "$ECS_CONTAINER_METADATA_URI_V4" | sed -e \'s/.*IPv4Addresses":\\["\\(.*\\)"\\],"AttachmentIndex.*/\\1/\')',
+          'echo "$ENI_IP localhost" > /etc/hosts',
+          'export CONNECT_REST_HOST_NAME="$ENI_IP"',
+          'export CONNECT_REST_ADVERTISED_HOST_NAME="$ENI_IP"',
+          // Install JDBC connector + Oracle driver before starting Connect.
+          'TMP=/tmp/confluent-hub-client',
+          'mkdir -p "$TMP"',
+          'curl -sSL -o /tmp/confluent-hub-client-latest.tar.gz http://client.hub.confluent.io/confluent-hub-client-latest.tar.gz',
+          'tar -xzf /tmp/confluent-hub-client-latest.tar.gz -C "$TMP"',
+          '"$TMP/bin/confluent-hub" install confluentinc/kafka-connect-jdbc:10.5.1 --no-prompt',
+          'curl -sSL -o /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib/ojdbc10.jar https://download.oracle.com/otn-pub/otn_software/jdbc/1916/ojdbc10.jar',
+          'exec /etc/confluent/docker/run',
+        ].join('; '),
+      ],
       environment: {
-        BOOTSTRAP_SERVERS: fullConfig.brokerString,
-        GROUP_ID: connectGroupId,
-        CONFIG_STORAGE_TOPIC: `${connectGroupId}.config`,
-        OFFSET_STORAGE_TOPIC: `${connectGroupId}.offsets`,
-        STATUS_STORAGE_TOPIC: `${connectGroupId}.status`,
-        KEY_CONVERTER: 'org.apache.kafka.connect.json.JsonConverter',
-        VALUE_CONVERTER: 'org.apache.kafka.connect.json.JsonConverter',
+        CONNECT_INTERNAL_VALUE_CONVERTER: 'org.apache.kafka.connect.json.JsonConverter',
+        CONNECT_GROUP_ID: connectGroupId,
+        CONNECT_OFFSET_STORAGE_TOPIC: `${connectGroupId}.offsets`,
+        CONNECT_CONSUMER_BOOTSTRAP_SERVERS: fullConfig.brokerString,
+        CONNECT_PRODUCER_OFFSET_FLUSH_TIMEOUT_MS: '30000',
+        CONNECT_CONFIG_STORAGE_TOPIC: `${connectGroupId}.config`,
+        CONNECT_INTERNAL_KEY_CONVERTER: 'org.apache.kafka.connect.json.JsonConverter',
+        CONNECT_PRODUCER_BOOTSTRAP_SERVERS: fullConfig.brokerString,
+        CONNECT_STATUS_STORAGE_TOPIC: `${connectGroupId}.status`,
+        CONNECT_PRODUCER_SECURITY_PROTOCOL: 'SSL',
+        CONNECT_VALUE_CONVERTER: 'org.apache.kafka.connect.json.JsonConverter',
+        CONNECT_KEY_CONVERTER: 'org.apache.kafka.connect.json.JsonConverter',
+        CONNECT_STATUS_STORAGE_PARTITIONS: '1',
+        CONNECT_CONSUMER_SECURITY_PROTOCOL: 'SSL',
+        CONNECT_BOOTSTRAP_SERVERS: fullConfig.brokerString,
+        CONNECT_OFFSET_STORAGE_PARTITIONS: '5',
+        CONNECT_SECURITY_PROTOCOL: 'SSL',
         STAGE: stage,
         TOPIC_NAMESPACE: fullConfig.topicNamespace,
-        CONNECT_BOOTSTRAP_SERVERS: fullConfig.brokerString,
-        CONNECT_GROUP_ID: connectGroupId,
-        CONNECT_CONFIG_STORAGE_TOPIC: `${connectGroupId}.config`,
-        CONNECT_OFFSET_STORAGE_TOPIC: `${connectGroupId}.offsets`,
-        CONNECT_STATUS_STORAGE_TOPIC: `${connectGroupId}.status`,
-        CONNECT_OFFSET_STORAGE_PARTITIONS: '5',
-        CONNECT_STATUS_STORAGE_PARTITIONS: '1',
-        CONNECT_KEY_CONVERTER: 'org.apache.kafka.connect.json.JsonConverter',
-        CONNECT_VALUE_CONVERTER: 'org.apache.kafka.connect.json.JsonConverter',
-        CONNECT_INTERNAL_KEY_CONVERTER: 'org.apache.kafka.connect.json.JsonConverter',
-        CONNECT_INTERNAL_VALUE_CONVERTER: 'org.apache.kafka.connect.json.JsonConverter',
-        CONNECT_SECURITY_PROTOCOL: 'SSL',
-        CONNECT_PRODUCER_BOOTSTRAP_SERVERS: fullConfig.brokerString,
-        CONNECT_PRODUCER_SECURITY_PROTOCOL: 'SSL',
-        CONNECT_CONSUMER_BOOTSTRAP_SERVERS: fullConfig.brokerString,
-        CONNECT_CONSUMER_SECURITY_PROTOCOL: 'SSL',
-        CONNECT_PRODUCER_OFFSET_FLUSH_TIMEOUT_MS: '30000',
       },
     });
     container.addPortMappings({ containerPort: 8083, protocol: ecs.Protocol.TCP });
 
-    new ecs.FargateService(this, 'Service', {
+    const service = new ecs.FargateService(this, 'Service', {
       cluster,
       taskDefinition: taskDef,
       serviceName: `wms-connector-${stage}`,
@@ -151,6 +182,98 @@ export class WmsConnectorStack extends cdk.Stack {
       vpcSubnets: { subnets: vpc.privateSubnets },
       assignPublicIp: false,
       desiredCount: 1,
+      enableExecuteCommand: true,
     });
+
+    const connectAlbSg = new ec2.SecurityGroup(this, 'ConnectAlbSg', {
+      vpc,
+      description: `Security group for wms-connector-${stage} Connect ALB`,
+      allowAllOutbound: true,
+    });
+
+    const connectAlb = new elbv2.ApplicationLoadBalancer(this, 'ConnectAlb', {
+      vpc,
+      internetFacing: false,
+      securityGroup: connectAlbSg,
+      vpcSubnets: { subnets: vpc.privateSubnets },
+    });
+
+    const connectListener = connectAlb.addListener('ConnectListener', {
+      port: 8083,
+      protocol: elbv2.ApplicationProtocol.HTTP,
+      open: false,
+    });
+
+    connectListener.addTargets('ConnectTargets', {
+      port: 8083,
+      protocol: elbv2.ApplicationProtocol.HTTP,
+      targets: [service],
+      healthCheck: {
+        path: '/',
+        healthyHttpCodes: '200-399',
+      },
+    });
+
+    taskSg.connections.allowFrom(connectAlbSg, ec2.Port.tcp(8083), 'Allow ALB to reach Connect');
+
+    const connectorLambdaSg = new ec2.SecurityGroup(this, 'ConnectorLambdaSg', {
+      vpc,
+      description: `Security group for wms-connector-${stage} Connect registrar`,
+      allowAllOutbound: true,
+    });
+    connectAlbSg.connections.allowFrom(
+      connectorLambdaSg,
+      ec2.Port.tcp(8083),
+      'Allow Lambda to call Connect ALB'
+    );
+
+    const connectorHandler = new lambdaNodejs.NodejsFunction(this, 'ConnectRegistrar', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      entry: 'lambda/connect-register.ts',
+      handler: 'handler',
+      bundling: {
+        externalModules: ['aws-sdk'],
+      },
+      timeout: cdk.Duration.minutes(2),
+      vpc,
+      vpcSubnets: { subnets: vpc.privateSubnets },
+      securityGroups: [connectorLambdaSg],
+      environment: {
+        CONNECT_URL: `http://${connectAlb.loadBalancerDnsName}:8083`,
+        STAGE: stage,
+        TOPIC_NAMESPACE: fullConfig.topicNamespace || '',
+        CONNECTOR_NAME: 'wms-oracle-cdc',
+        CONNECTOR_TYPE: 'jdbc',
+      },
+    });
+    connectorHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['secretsmanager:GetSecretValue'],
+        resources: [
+          cdk.Stack.of(this).formatArn({
+            service: 'secretsmanager',
+            resource: 'secret',
+            resourceName: 'mmdl/*',
+            arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+          }),
+        ],
+      })
+    );
+
+    const provider = new cr.Provider(this, 'ConnectRegistrarProvider', {
+      onEventHandler: connectorHandler,
+    });
+
+    const connectorResource = new cdk.CustomResource(this, 'WmsOracleConnector', {
+      serviceToken: provider.serviceToken,
+      properties: {
+        ConnectorName: 'wms-oracle-cdc',
+        Stage: stage,
+        TopicNamespace: fullConfig.topicNamespace || '',
+      },
+    });
+    connectorResource.node.addDependency(service);
+    connectorResource.node.addDependency(connectListener);
   }
 }
