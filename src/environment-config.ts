@@ -15,6 +15,8 @@ export const SecretPaths = {
   brokerStringDefault: 'mmdl/default/brokerString',
   dbInfo: (stage: string) => `mmdl/${stage}/dbInfo`,
   dbInfoDefault: 'mmdl/default/dbInfo',
+  alertEmails: (stage: string) => `mmdl/${stage}/alertEmails`,
+  alertEmailsDefault: 'mmdl/default/alertEmails',
 } as const;
 
 /**
@@ -108,6 +110,7 @@ export interface FullEnvironmentConfig extends EnvironmentConfig {
   dbInfo: DbInfo;
   iamPath: string;
   iamPermissionsBoundary: string;
+  alertEmails: string[];
 }
 
 /**
@@ -188,6 +191,38 @@ export async function getSecretWithFallback(
   }
 }
 
+function parseAlertEmails(secretValue: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(secretValue);
+  } catch {
+    throw new Error(
+      'alertEmails secret must be valid JSON with shape {"emails":["user1@example.com","user2@example.com"]}.'
+    );
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(
+      'alertEmails secret must be an object with shape {"emails":["user1@example.com","user2@example.com"]}.'
+    );
+  }
+
+  const emailsRaw = (parsed as { emails?: unknown }).emails;
+  if (!Array.isArray(emailsRaw)) {
+    throw new Error('alertEmails secret is missing required "emails" array.');
+  }
+
+  const emails = emailsRaw
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter((value) => value.length > 0);
+
+  if (emails.length === 0) {
+    throw new Error('alertEmails secret must contain at least one non-empty email address.');
+  }
+
+  return Array.from(new Set(emails));
+}
+
 /**
  * Load secrets for an environment.
  * Uses fallback pattern: mmdl/{stage}/... -> mmdl/default/...
@@ -198,23 +233,27 @@ export async function loadEnvironmentSecrets(stage: string): Promise<{
   dbInfo: DbInfo;
   iamPath: string;
   iamPermissionsBoundary: string;
+  alertEmails: string[];
 }> {
-  const [vpcJson, brokerString, dbInfoJson, iamPath, iamPermissionsBoundary] = await Promise.all([
-    getSecretWithFallback(SecretPaths.vpc(stage), SecretPaths.vpcDefault),
-    getSecretWithFallback(SecretPaths.brokerString(stage), SecretPaths.brokerStringDefault),
-    getSecretWithFallback(SecretPaths.dbInfo(stage), SecretPaths.dbInfoDefault),
-    getSecretWithFallback(SecretPaths.iamPath(stage), SecretPaths.iamPathDefault),
-    getSecretWithFallback(
-      SecretPaths.iamPermissionsBoundary(stage),
-      SecretPaths.iamPermissionsBoundaryDefault
-    ),
-  ]);
+  const [vpcJson, brokerString, dbInfoJson, iamPath, iamPermissionsBoundary, alertEmailsJson] =
+    await Promise.all([
+      getSecretWithFallback(SecretPaths.vpc(stage), SecretPaths.vpcDefault),
+      getSecretWithFallback(SecretPaths.brokerString(stage), SecretPaths.brokerStringDefault),
+      getSecretWithFallback(SecretPaths.dbInfo(stage), SecretPaths.dbInfoDefault),
+      getSecretWithFallback(SecretPaths.iamPath(stage), SecretPaths.iamPathDefault),
+      getSecretWithFallback(
+        SecretPaths.iamPermissionsBoundary(stage),
+        SecretPaths.iamPermissionsBoundaryDefault
+      ),
+      getSecretWithFallback(SecretPaths.alertEmails(stage), SecretPaths.alertEmailsDefault),
+    ]);
   return {
     vpc: JSON.parse(vpcJson) as VpcConfig,
     brokerString,
     dbInfo: JSON.parse(dbInfoJson) as DbInfo,
     iamPath,
     iamPermissionsBoundary,
+    alertEmails: parseAlertEmails(alertEmailsJson),
   };
 }
 

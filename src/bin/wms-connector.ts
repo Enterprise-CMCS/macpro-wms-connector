@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib';
 import { WmsConnectorStack } from '../cdk/wms-connector-stack';
+import { WmsAlertsStack } from '../cdk/wms-alerts-stack';
 import { getFullEnvironmentConfig } from '../environment-config';
 
 async function main() {
@@ -16,12 +17,23 @@ async function main() {
 
   const fullConfig = await getFullEnvironmentConfig(stage);
 
-  new WmsConnectorStack(app, `wms-connector-${stage}`, {
-    fullConfig,
+  const stackProps: cdk.StackProps = {
     env: {
       account: process.env.CDK_DEFAULT_ACCOUNT,
       region: process.env.CDK_DEFAULT_REGION || 'us-east-1',
     },
+  };
+
+  const alertsStack = new WmsAlertsStack(app, `wms-alerts-${stage}`, {
+    ...stackProps,
+    stage,
+    alertEmails: fullConfig.alertEmails,
+  });
+
+  new WmsConnectorStack(app, `wms-connector-${stage}`, {
+    ...stackProps,
+    fullConfig,
+    alertsTopicArn: alertsStack.alertsTopicArn,
   });
 
   app.synth();

@@ -10,6 +10,9 @@
     "cdk": "yarn build && yarn exec cdk"
   },
   "dependencies": {
+    "@aws-sdk/client-cloudwatch": "^3.958.0",
+    "@aws-sdk/client-dynamodb": "^3.958.0",
+    "@aws-sdk/client-ecs": "^3.958.0",
     "@aws-sdk/client-secrets-manager": "^3.761.0",
     "aws-cdk-lib": "^2.170.0",
     "aws-sdk": "^2.1691.0",

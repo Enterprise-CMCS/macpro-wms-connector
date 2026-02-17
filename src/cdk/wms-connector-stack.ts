@@ -1,10 +1,16 @@
 import * as cdk from 'aws-cdk-lib';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as lambdaNodejs from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Construct } from 'constructs';
@@ -13,6 +19,8 @@ import { FullEnvironmentConfig, NAMED_STAGES, validateStage } from '../environme
 export interface WmsConnectorStackProps extends cdk.StackProps {
   /** Full environment configuration including secrets from AWS Secrets Manager. */
   fullConfig: FullEnvironmentConfig;
+  /** SNS topic ARN used for connector alerts and alarms. */
+  alertsTopicArn: string;
 }
 
 /**
@@ -109,6 +117,8 @@ export class WmsConnectorStack extends cdk.Stack {
     const servicePrefix = `wms-connector-${stage}`;
     const topicPrefix = fullConfig.topicNamespace ? `${fullConfig.topicNamespace}.` : '';
     const connectGroupId = `${topicPrefix}mgmt.connect.${servicePrefix}`;
+    const alertsTopic = sns.Topic.fromTopicArn(this, 'AlertsTopic', props.alertsTopicArn);
+    const alarmAction = new cloudwatchActions.SnsAction(alertsTopic);
 
     const taskDef = new ecs.FargateTaskDefinition(this, 'TaskDef', {
       memoryLimitMiB: parseInt(fullConfig.taskMemory, 10),
@@ -185,6 +195,18 @@ export class WmsConnectorStack extends cdk.Stack {
       enableExecuteCommand: true,
     });
 
+    const restartBudgetTable = new dynamodb.Table(this, 'RestartBudgetTable', {
+      tableName: `wms-connector-${stage}-restart-budget`,
+      partitionKey: {
+        name: 'connectorId',
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      pointInTimeRecovery: true,
+      removalPolicy: isEphemeral ? cdk.RemovalPolicy.DESTROY : cdk.RemovalPolicy.RETAIN,
+    });
+
     const connectAlbSg = new ec2.SecurityGroup(this, 'ConnectAlbSg', {
       vpc,
       description: `Security group for wms-connector-${stage} Connect ALB`,
@@ -227,6 +249,17 @@ export class WmsConnectorStack extends cdk.Stack {
       'Allow Lambda to call Connect ALB'
     );
 
+    const healthLambdaSg = new ec2.SecurityGroup(this, 'HealthLambdaSg', {
+      vpc,
+      description: `Security group for wms-connector-${stage} health checks`,
+      allowAllOutbound: true,
+    });
+    connectAlbSg.connections.allowFrom(
+      healthLambdaSg,
+      ec2.Port.tcp(8083),
+      'Allow health Lambda to call Connect ALB'
+    );
+
     const connectorHandler = new lambdaNodejs.NodejsFunction(this, 'ConnectRegistrar', {
       runtime: lambda.Runtime.NODEJS_18_X,
       entry: 'lambda/connect-register.ts',
@@ -261,6 +294,63 @@ export class WmsConnectorStack extends cdk.Stack {
       })
     );
 
+    const healthHandler = new lambdaNodejs.NodejsFunction(this, 'ConnectHealth', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: 'lambda/connect-health.ts',
+      handler: 'handler',
+      bundling: {
+        externalModules: ['aws-sdk'],
+      },
+      timeout: cdk.Duration.minutes(2),
+      vpc,
+      vpcSubnets: { subnets: vpc.privateSubnets },
+      securityGroups: [healthLambdaSg],
+      environment: {
+        CONNECT_URL: `http://${connectAlb.loadBalancerDnsName}:8083`,
+        CONNECTOR_NAME: 'wms-oracle-cdc',
+        STAGE: stage,
+        CLUSTER_NAME: cluster.clusterName,
+        SERVICE_NAME: service.serviceName,
+        RESTART_TABLE_NAME: restartBudgetTable.tableName,
+        METRIC_NAMESPACE: `${servicePrefix}/Health`,
+      },
+    });
+    healthHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['secretsmanager:GetSecretValue'],
+        resources: [
+          cdk.Stack.of(this).formatArn({
+            service: 'secretsmanager',
+            resource: 'secret',
+            resourceName: 'mmdl/*',
+            arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+          }),
+        ],
+      })
+    );
+    healthHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['ecs:DescribeServices'],
+        resources: ['*'],
+      })
+    );
+    healthHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      })
+    );
+    restartBudgetTable.grantReadWriteData(healthHandler);
+
+    const healthSchedule = new events.Rule(this, 'ConnectHealthScheduleRule', {
+      description: `Run health checks every 10 minutes for wms-connector-${stage}.`,
+      schedule: events.Schedule.rate(cdk.Duration.minutes(10)),
+    });
+    healthSchedule.addTarget(new eventsTargets.LambdaFunction(healthHandler));
+
     const provider = new cr.Provider(this, 'ConnectRegistrarProvider', {
       onEventHandler: connectorHandler,
     });
@@ -275,5 +365,167 @@ export class WmsConnectorStack extends cdk.Stack {
     });
     connectorResource.node.addDependency(service);
     connectorResource.node.addDependency(connectListener);
+    healthHandler.node.addDependency(service);
+    healthHandler.node.addDependency(connectListener);
+
+    const healthMetricNamespace = `${servicePrefix}/Health`;
+    const healthMetricAlarmNames = [
+      'HealthCheckFailed',
+      'ConnectorStateFailed',
+      'ConnectorTaskFailed',
+      'DbTcpUnreachable',
+      'AutoRestartBudgetExceeded',
+    ];
+
+    for (const metricName of healthMetricAlarmNames) {
+      const alarm = new cloudwatch.Alarm(this, `${metricName}Alarm`, {
+        alarmName: `${servicePrefix}-${metricName}`,
+        alarmDescription: `${metricName} alarm for ${servicePrefix}.`,
+        metric: new cloudwatch.Metric({
+          namespace: healthMetricNamespace,
+          metricName,
+          statistic: 'Sum',
+          period: cdk.Duration.minutes(10),
+        }),
+        threshold: 1,
+        evaluationPeriods: 1,
+        datapointsToAlarm: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+      alarm.addAlarmAction(alarmAction);
+    }
+
+    const healthLambdaErrorAlarm = new cloudwatch.Alarm(this, 'ConnectHealthLambdaErrorAlarm', {
+      alarmName: `${servicePrefix}-ConnectHealthLambdaErrors`,
+      alarmDescription: `Lambda errors for ${servicePrefix} connect health checks.`,
+      metric: healthHandler.metricErrors({
+        statistic: 'Sum',
+        period: cdk.Duration.minutes(10),
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      datapointsToAlarm: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    healthLambdaErrorAlarm.addAlarmAction(alarmAction);
+
+    const connectorLogMetricNamespace = `${servicePrefix}/ConnectorLogs`;
+    new logs.CfnMetricFilter(this, 'OracleErrorMetricFilter', {
+      logGroupName: connectLogGroup.logGroupName,
+      filterPattern: '?"ORA"',
+      metricTransformations: [
+        {
+          metricNamespace: connectorLogMetricNamespace,
+          metricName: 'OracleErrorCount',
+          metricValue: '1',
+          defaultValue: 0,
+        },
+      ],
+    });
+    const unknownTopicLogFilter = new logs.MetricFilter(this, 'UnknownTopicMetricFilter', {
+      logGroup: connectLogGroup,
+      metricNamespace: connectorLogMetricNamespace,
+      metricName: 'UnknownTopicOrPartitionCount',
+      filterPattern: logs.FilterPattern.literal('UNKNOWN_TOPIC_OR_PARTITION'),
+      metricValue: '1',
+      defaultValue: 0,
+    });
+    const connectExceptionLogFilter = new logs.MetricFilter(this, 'ConnectExceptionMetricFilter', {
+      logGroup: connectLogGroup,
+      metricNamespace: connectorLogMetricNamespace,
+      metricName: 'ConnectExceptionCount',
+      filterPattern: logs.FilterPattern.anyTerm('ConnectException', 'SQLException'),
+      metricValue: '1',
+      defaultValue: 0,
+    });
+
+    const oraAlarm = new cloudwatch.Alarm(this, 'OracleErrorAlarm', {
+      alarmName: `${servicePrefix}-OracleErrors`,
+      alarmDescription: `Oracle error log events detected for ${servicePrefix}.`,
+      metric: new cloudwatch.Metric({
+        namespace: connectorLogMetricNamespace,
+        metricName: 'OracleErrorCount',
+        statistic: 'Sum',
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      datapointsToAlarm: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    oraAlarm.addAlarmAction(alarmAction);
+
+    const unknownTopicAlarm = new cloudwatch.Alarm(this, 'UnknownTopicAlarm', {
+      alarmName: `${servicePrefix}-UnknownTopicOrPartition`,
+      alarmDescription: `Unknown-topic errors detected for ${servicePrefix}.`,
+      metric: unknownTopicLogFilter.metric({
+        statistic: 'Sum',
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 5,
+      evaluationPeriods: 1,
+      datapointsToAlarm: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    unknownTopicAlarm.addAlarmAction(alarmAction);
+
+    const connectExceptionAlarm = new cloudwatch.Alarm(this, 'ConnectExceptionAlarm', {
+      alarmName: `${servicePrefix}-ConnectExceptions`,
+      alarmDescription: `Kafka Connect exceptions detected for ${servicePrefix}.`,
+      metric: connectExceptionLogFilter.metric({
+        statistic: 'Sum',
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      datapointsToAlarm: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    connectExceptionAlarm.addAlarmAction(alarmAction);
+
+    const ecsTaskFailureRule = new events.Rule(this, 'EcsTaskFailureRule', {
+      description: `Detect stopped ECS tasks for ${servicePrefix}.`,
+      eventPattern: {
+        source: ['aws.ecs'],
+        detailType: ['ECS Task State Change'],
+        detail: {
+          clusterArn: [cluster.clusterArn],
+          group: [`service:${service.serviceName}`],
+          lastStatus: ['STOPPED'],
+        },
+      },
+    });
+    ecsTaskFailureRule.addTarget(
+      new eventsTargets.SnsTopic(alertsTopic, {
+        message: events.RuleTargetInput.fromText(
+          `ECS task stopped for ${servicePrefix}. Check ECS service and connector logs.`
+        ),
+      })
+    );
+
+    const ecsServiceErrorRule = new events.Rule(this, 'EcsServiceErrorRule', {
+      description: `Detect ECS service errors for ${servicePrefix}.`,
+      eventPattern: {
+        source: ['aws.ecs'],
+        detailType: ['ECS Service Action'],
+        detail: {
+          clusterArn: [cluster.clusterArn],
+          service: [service.serviceName],
+          eventType: ['ERROR'],
+        },
+      },
+    });
+    ecsServiceErrorRule.addTarget(
+      new eventsTargets.SnsTopic(alertsTopic, {
+        message: events.RuleTargetInput.fromText(
+          `ECS service error event for ${servicePrefix}. Check ECS events and connector health.`
+        ),
+      })
+    );
   }
 }
