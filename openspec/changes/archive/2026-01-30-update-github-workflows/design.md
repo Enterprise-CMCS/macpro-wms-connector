@@ -25,7 +25,7 @@ The WMS connector project inherited its `.github` directory from macpro-appian-c
 
 **Choice**: Use kebab-case pattern `wms-connector-{stage}` matching Appian's `appian-connector-{stage}`
 
-**Rationale**: 
+**Rationale**:
 - Cross-project consistency makes operations easier
 - Prepares for future stacks (`wms-alerts-{stage}`)
 - CloudFormation stack names are case-insensitive anyway, but kebab-case is conventional
@@ -44,7 +44,7 @@ The WMS connector project inherited its `.github` directory from macpro-appian-c
 
 **Choice**: Create `.nvmrc` containing `20` to work with existing setup action
 
-**Rationale**: 
+**Rationale**:
 - `package.json` already specifies `"node": ">=18"`
 - Node 20 is current LTS
 - Keeps setup action working without modification

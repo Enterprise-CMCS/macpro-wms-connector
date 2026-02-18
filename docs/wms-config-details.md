@@ -242,4 +242,3 @@ Example **dbInfo** JSON shape (align with Debezium Oracle connector and Appian D
 - **Deploy with stack, teardown with stack.** Ephemeral environments are created when the CDK stack for that stage is deployed and cleaned up when the stack is destroyed. No separate manual cleanup is required for the Connect service or connector config.
 - **Pipeline:** When the branch is deleted or the ephemeral environment is retired, run `cdk destroy` for that stage so connector and Connect resources are removed automatically.
 - **Topic cleanup (optional):** Namespaced ephemeral topics may be deleted as part of stack destroy. Deletion logic must **never** target non-namespaced (main/val/prod) topics.
-
