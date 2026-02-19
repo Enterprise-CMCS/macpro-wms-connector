@@ -281,4 +281,3 @@ Current gap:
 | `.github/workflows/deploy.yml` | Deploy workflow for `main`, `val`, `production`. |
 | `.github/workflows/pre-commit.yml` | Pull request pre-commit checks. |
 | `.github/workflows/dependency-review.yml` | Pull request dependency vulnerability review. |
-
