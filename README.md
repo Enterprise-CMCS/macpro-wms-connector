@@ -1,8 +1,8 @@
 # macpro-wms-connector
 
-[![Deploy (main)](https://github.com/Enterprise-CMCS/macpro-wms-connector/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/Enterprise-CMCS/macpro-wms-connector/actions/workflows/deploy.yml)
-[![Pre-commit](https://github.com/Enterprise-CMCS/macpro-wms-connector/actions/workflows/pre-commit.yml/badge.svg?branch=main)](https://github.com/Enterprise-CMCS/macpro-wms-connector/actions/workflows/pre-commit.yml)
-[![Dependency Review](https://github.com/Enterprise-CMCS/macpro-wms-connector/actions/workflows/dependency-review.yml/badge.svg?branch=main)](https://github.com/Enterprise-CMCS/macpro-wms-connector/actions/workflows/dependency-review.yml)
+[![Deploy (main)](https://img.shields.io/github/actions/workflow/status/Enterprise-CMCS/macpro-wms-connector/deploy.yml?branch=main&label=Deploy%20(main))](https://github.com/Enterprise-CMCS/macpro-wms-connector/actions/workflows/deploy.yml)
+[![Pre-commit](https://img.shields.io/github/actions/workflow/status/Enterprise-CMCS/macpro-wms-connector/pre-commit.yml?branch=main&label=Pre-commit)](https://github.com/Enterprise-CMCS/macpro-wms-connector/actions/workflows/pre-commit.yml)
+[![Dependency Review](https://img.shields.io/github/actions/workflow/status/Enterprise-CMCS/macpro-wms-connector/dependency-review.yml?branch=main&label=Dependency%20Review)](https://github.com/Enterprise-CMCS/macpro-wms-connector/actions/workflows/dependency-review.yml)
 [![Health: CloudWatch + SNS](https://img.shields.io/badge/health-CloudWatch%20%2B%20SNS-brightgreen)](https://aws.amazon.com/cloudwatch/)
 [![Coverage: Planned](https://img.shields.io/badge/coverage-planned-lightgrey)](https://github.com/Enterprise-CMCS/macpro-wms-connector/actions)
 
