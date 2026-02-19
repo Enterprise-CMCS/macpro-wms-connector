@@ -13,12 +13,21 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
+
+      - name: Sync codejson branch from main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B codejson origin/main
+          git push origin codejson --force
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -29,7 +38,29 @@ jobs:
         run: go install github.com/boyter/scc/v3@latest
 
       - name: Update code.json
+        id: update
         uses: DSACMS/automated-codejson-generator@main
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: "main"
+          BRANCH: "codejson"
+          SKIP_PR: "true"
+          ADMIN_TOKEN: ${{ secrets.ADMIN_PAT }}
+
+      - name: Enforce direct push mode
+        if: steps.update.outputs.updated == 'true'
+        run: |
+          if [ "${{ steps.update.outputs.method_used }}" != "direct_push" ]; then
+            echo "Expected method_used=direct_push but got '${{ steps.update.outputs.method_used }}'."
+            exit 1
+          fi
+
+      - name: Create or update pull request
+        if: steps.update.outputs.updated == 'true'
+        uses: repo-sync/pull-request@v2
+        with:
+          source_branch: codejson
+          destination_branch: main
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          pr_title: Update code.json
+          pr_body: |
+            Automated update of code.json from the fixed codejson branch.

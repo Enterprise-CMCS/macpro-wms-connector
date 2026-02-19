@@ -261,7 +261,7 @@ export class WmsConnectorStack extends cdk.Stack {
     );
 
     const connectorHandler = new lambdaNodejs.NodejsFunction(this, 'ConnectRegistrar', {
-      runtime: lambda.Runtime.NODEJS_18_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       entry: 'lambda/connect-register.ts',
       handler: 'handler',
       bundling: {
@@ -295,7 +295,7 @@ export class WmsConnectorStack extends cdk.Stack {
     );
 
     const healthHandler = new lambdaNodejs.NodejsFunction(this, 'ConnectHealth', {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       entry: 'lambda/connect-health.ts',
       handler: 'handler',
       bundling: {

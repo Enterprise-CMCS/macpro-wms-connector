@@ -42,12 +42,12 @@ The setup action SHALL read Node.js version from `.nvmrc` file at project root.
 - **WHEN** the setup action runs
 - **THEN** it configures Node.js using the version specified in `.nvmrc`
 
-### Requirement: Project has .nvmrc specifying Node 20
-The project SHALL have a `.nvmrc` file containing the Node.js version `20`.
+### Requirement: Project has .nvmrc specifying Node 24
+The project SHALL have a `.nvmrc` file containing the Node.js version `24`.
 
-#### Scenario: .nvmrc exists with Node 20
+#### Scenario: .nvmrc exists with Node 24
 - **WHEN** CI or local development environment checks Node version
-- **THEN** `.nvmrc` file exists at project root containing `20`
+- **THEN** `.nvmrc` file exists at project root containing `24`
 
 ### Requirement: PR automation creates release PRs
 The auto-create-pr workflows SHALL create release PRs when code flows through environments.

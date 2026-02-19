@@ -13,3 +13,4 @@ cdk.context.json
 .DS_Store
 oidc/
 data/wms-db-exports/
+demo-script.md
