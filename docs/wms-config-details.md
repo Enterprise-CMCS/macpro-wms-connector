@@ -200,12 +200,12 @@ If you also want the application to produce events directly (alongside CDC):
 
 ## Secrets Manager (AWS)
 
-The connector resolves secrets using a **stage-first, then default** pattern. Look up `wms/{stage}/<secret-name>` first; if missing, use `wms/default/<secret-name>`.
+The connector resolves secrets using a **stage-first, then default** pattern. Look up `mmdl/{stage}/<secret-name>` first; if missing, use `mmdl/default/<secret-name>`.
 
 | Secret name   | Paths                                                                 | Purpose |
 |---------------|-----------------------------------------------------------------------|---------|
-| **brokerString** | `wms/{stage}/brokerString` → `wms/default/brokerString`               | MSK bootstrap broker string for Kafka Connect. Default is available for main, val, production; stage-specific overrides when a different cluster is used. |
-| **dbInfo**    | `wms/{stage}/dbInfo` → `wms/default/dbInfo`                            | Oracle connection details. JSON object with fields required by the Debezium Oracle connector (e.g., host/IP, port, db/service name, user, password, schema). Create or verify these secrets per environment when CDC credentials are available. |
+| **brokerString** | `mmdl/{stage}/brokerString` → `mmdl/default/brokerString`               | MSK bootstrap broker string for Kafka Connect. Default is available for main, val, production; stage-specific overrides when a different cluster is used. |
+| **dbInfo**    | `mmdl/{stage}/dbInfo` → `mmdl/default/dbInfo`                            | Oracle connection details. JSON object with fields required by the Debezium Oracle connector (e.g., host/IP, port, db/service name, user, password, schema). Create or verify these secrets per environment when CDC credentials are available. |
 
 Example **dbInfo** JSON shape (align with Debezium Oracle connector and Appian DbConfig where applicable):
 
@@ -242,4 +242,3 @@ Example **dbInfo** JSON shape (align with Debezium Oracle connector and Appian D
 - **Deploy with stack, teardown with stack.** Ephemeral environments are created when the CDK stack for that stage is deployed and cleaned up when the stack is destroyed. No separate manual cleanup is required for the Connect service or connector config.
 - **Pipeline:** When the branch is deleted or the ephemeral environment is retired, run `cdk destroy` for that stage so connector and Connect resources are removed automatically.
 - **Topic cleanup (optional):** Namespaced ephemeral topics may be deleted as part of stack destroy. Deletion logic must **never** target non-namespaced (main/val/prod) topics.
-
