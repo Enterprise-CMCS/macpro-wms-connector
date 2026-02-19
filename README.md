@@ -16,14 +16,14 @@
 
 ## How It Fits In The Connector Ecosystem
 
-This connector is one pipeline in the broader connector platform, alongside **SEATool** connectors and **macpro-appian-connector**. Together, these connectors move source-system data into Kafka/BigMAC so it can be consumed by other platform applications.
+This connector is one pipeline in the broader connector platform, alongside **seatool-connectors** and **macpro-appian-connector**. Together, these connectors move source-system data into Kafka/BigMAC so it can be consumed by other platform applications.
 
 ## Current Features And Recent Improvements
 
 - Stage-aware stack names and deployments: `wms-alerts-<stage>` and `wms-connector-<stage>`.
 - Stage validation for safe topic/resource naming.
 - Ephemeral topic namespacing for non-named stages.
-- Secrets fallback model: `mmdl/{stage}/...` to `mmdl/default/...`.
+- Secrets fallback model: `wms/{stage}/...` to `wms/default/...`.
 - Dedicated alerting stack with SNS email subscriptions from Secrets Manager.
 - 10-minute health checks with CloudWatch metrics and alarms.
 - Restart-budget protection via DynamoDB (max 3 restart attempts per rolling 60 minutes).
@@ -69,12 +69,12 @@ It does not run a local Kafka Connect runtime by default.
 
 The CDK app loads environment secrets at synth/deploy time using stage-first fallback:
 
-- `mmdl/{stage}/vpc` to `mmdl/default/vpc`
-- `mmdl/{stage}/iam/path` to `mmdl/default/iam/path`
-- `mmdl/{stage}/iam/permissionsBoundary` to `mmdl/default/iam/permissionsBoundary`
-- `mmdl/{stage}/brokerString` to `mmdl/default/brokerString`
-- `mmdl/{stage}/dbInfo` to `mmdl/default/dbInfo`
-- `mmdl/{stage}/alertEmails` to `mmdl/default/alertEmails`
+- `wms/{stage}/vpc` to `wms/default/vpc`
+- `wms/{stage}/iam/path` to `wms/default/iam/path`
+- `wms/{stage}/iam/permissionsBoundary` to `wms/default/iam/permissionsBoundary`
+- `wms/{stage}/brokerString` to `wms/default/brokerString`
+- `wms/{stage}/dbInfo` to `wms/default/dbInfo`
+- `wms/{stage}/alertEmails` to `wms/default/alertEmails`
 
 ## Deploy From Your Machine
 
@@ -214,8 +214,8 @@ Notes:
 
 Secret lookup order:
 
-- `mmdl/{stage}/alertEmails`
-- fallback: `mmdl/default/alertEmails`
+- `wms/{stage}/alertEmails`
+- fallback: `wms/default/alertEmails`
 
 Expected secret JSON format:
 
@@ -230,7 +230,7 @@ Create the stage-specific secret (first time):
 ```bash
 aws secretsmanager create-secret \
   --region us-east-1 \
-  --name mmdl/main/alertEmails \
+  --name wms/main/alertEmails \
   --secret-string '{"emails":["user1@example.com","user2@example.com"]}'
 ```
 
@@ -239,7 +239,7 @@ Update an existing secret:
 ```bash
 aws secretsmanager put-secret-value \
   --region us-east-1 \
-  --secret-id mmdl/main/alertEmails \
+  --secret-id wms/main/alertEmails \
   --secret-string '{"emails":["user1@example.com","user2@example.com"]}'
 ```
 
@@ -282,9 +282,3 @@ Current gap:
 | `.github/workflows/pre-commit.yml` | Pull request pre-commit checks. |
 | `.github/workflows/dependency-review.yml` | Pull request dependency vulnerability review. |
 
-## Badge References
-
-- [GitHub Docs: Adding a workflow status badge](https://docs.github.com/actions/monitoring-and-troubleshooting-workflows/monitoring-workflows/adding-a-workflow-status-badge)
-- [GitHub Docs: Workflow syntax](https://docs.github.com/actions/reference/workflows-and-actions/workflow-syntax)
-- [Shields.io badge docs](https://shields.io/badges)
-- [Codecov status badges](https://docs.codecov.com/docs/status-badges)
