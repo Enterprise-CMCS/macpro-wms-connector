@@ -23,7 +23,7 @@ This connector is one pipeline in the broader connector platform, alongside **se
 - Stage-aware stack names and deployments: `wms-alerts-<stage>` and `wms-connector-<stage>`.
 - Stage validation for safe topic/resource naming.
 - Ephemeral topic namespacing for non-named stages.
-- Secrets fallback model: `wms/{stage}/...` to `wms/default/...`.
+- Secrets fallback model: `mmdl/{stage}/...` to `mmdl/default/...`.
 - Dedicated alerting stack with SNS email subscriptions from Secrets Manager.
 - 10-minute health checks with CloudWatch metrics and alarms.
 - Restart-budget protection via DynamoDB (max 3 restart attempts per rolling 60 minutes).
@@ -69,12 +69,12 @@ It does not run a local Kafka Connect runtime by default.
 
 The CDK app loads environment secrets at synth/deploy time using stage-first fallback:
 
-- `wms/{stage}/vpc` to `wms/default/vpc`
-- `wms/{stage}/iam/path` to `wms/default/iam/path`
-- `wms/{stage}/iam/permissionsBoundary` to `wms/default/iam/permissionsBoundary`
-- `wms/{stage}/brokerString` to `wms/default/brokerString`
-- `wms/{stage}/dbInfo` to `wms/default/dbInfo`
-- `wms/{stage}/alertEmails` to `wms/default/alertEmails`
+- `mmdl/{stage}/vpc` to `mmdl/default/vpc`
+- `mmdl/{stage}/iam/path` to `mmdl/default/iam/path`
+- `mmdl/{stage}/iam/permissionsBoundary` to `mmdl/default/iam/permissionsBoundary`
+- `mmdl/{stage}/brokerString` to `mmdl/default/brokerString`
+- `mmdl/{stage}/dbInfo` to `mmdl/default/dbInfo`
+- `mmdl/{stage}/alertEmails` to `mmdl/default/alertEmails`
 
 ## Deploy From Your Machine
 
@@ -204,6 +204,7 @@ Notes:
    - Connector/task status (`GET /connectors/wms-oracle-cdc/status`)
    - ECS service desired vs running count
    - Oracle DB TCP reachability using `dbInfo` host/port
+   - repeated soft connector/task status anomalies before triggering automatic restarts
 3. It publishes CloudWatch metrics under:
    - `wms-connector-<stage>/Health`
    - `wms-connector-<stage>/ConnectorLogs`
@@ -214,8 +215,8 @@ Notes:
 
 Secret lookup order:
 
-- `wms/{stage}/alertEmails`
-- fallback: `wms/default/alertEmails`
+- `mmdl/{stage}/alertEmails`
+- fallback: `mmdl/default/alertEmails`
 
 Expected secret JSON format:
 
@@ -230,7 +231,7 @@ Create the stage-specific secret (first time):
 ```bash
 aws secretsmanager create-secret \
   --region us-east-1 \
-  --name wms/main/alertEmails \
+  --name mmdl/main/alertEmails \
   --secret-string '{"emails":["user1@example.com","user2@example.com"]}'
 ```
 
@@ -239,7 +240,7 @@ Update an existing secret:
 ```bash
 aws secretsmanager put-secret-value \
   --region us-east-1 \
-  --secret-id wms/main/alertEmails \
+  --secret-id mmdl/main/alertEmails \
   --secret-string '{"emails":["user1@example.com","user2@example.com"]}'
 ```
 

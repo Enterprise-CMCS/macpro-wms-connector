@@ -370,6 +370,8 @@ export class WmsConnectorStack extends cdk.Stack {
 
     const healthMetricNamespace = `${servicePrefix}/Health`;
     const healthMetricAlarmNames = [
+      'ConnectApiUnreachable',
+      'EcsServiceUnhealthy',
       'HealthCheckFailed',
       'ConnectorStateFailed',
       'ConnectorTaskFailed',

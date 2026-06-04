@@ -15,6 +15,8 @@ const RESTART_WINDOW_MS = 60 * 60 * 1000;
 const MAX_RESTART_ATTEMPTS = 3;
 const CONNECT_REQUEST_TIMEOUT_MS = 5000;
 const DB_TCP_TIMEOUT_MS = 3000;
+const SOFT_FAILURE_CONFIRMATION_THRESHOLD = 3;
+const HARD_FAILURE_STATES = new Set(['FAILED']);
 
 type DbInfo = {
   ip?: string;
@@ -33,6 +35,7 @@ type ConnectorStatusResponse = {
 type RestartBudget = {
   windowStartEpochMs: number;
   attemptCount: number;
+  consecutiveSoftFailureCount: number;
 };
 
 type HealthMetrics = {
@@ -151,17 +154,25 @@ async function getRestartBudget(tableName: string, connectorId: string): Promise
 
   const windowStart = Number(resp.Item.windowStartEpochMs?.N ?? now);
   const attempts = Number(resp.Item.attemptCount?.N ?? 0);
+  const consecutiveSoftFailureCount = Number(resp.Item.consecutiveSoftFailureCount?.N ?? 0);
 
-  if (!Number.isFinite(windowStart) || !Number.isFinite(attempts) || now - windowStart >= RESTART_WINDOW_MS) {
+  if (
+    !Number.isFinite(windowStart) ||
+    !Number.isFinite(attempts) ||
+    !Number.isFinite(consecutiveSoftFailureCount) ||
+    now - windowStart >= RESTART_WINDOW_MS
+  ) {
     return {
       windowStartEpochMs: now,
       attemptCount: 0,
+      consecutiveSoftFailureCount: 0,
     };
   }
 
   return {
     windowStartEpochMs: windowStart,
     attemptCount: attempts,
+    consecutiveSoftFailureCount,
   };
 }
 
@@ -178,10 +189,25 @@ async function saveRestartBudget(
         connectorId: { S: connectorId },
         windowStartEpochMs: { N: String(budget.windowStartEpochMs) },
         attemptCount: { N: String(budget.attemptCount) },
+        consecutiveSoftFailureCount: { N: String(budget.consecutiveSoftFailureCount) },
         updatedAt: { N: String(now) },
       },
     })
   );
+}
+
+function summarizeStatus(payload: ConnectorStatusResponse) {
+  return {
+    name: payload.name,
+    connectorState: payload.connector?.state || 'UNKNOWN',
+    taskCount: payload.tasks?.length || 0,
+    tasks: (payload.tasks || []).map((task) => ({
+      id: task.id ?? 'unknown',
+      state: task.state || 'UNKNOWN',
+      hasTrace: Boolean(task.trace),
+      traceSnippet: task.trace ? task.trace.split('\n')[0]?.slice(0, 300) : undefined,
+    })),
+  };
 }
 
 async function attemptConnectorRestart(connectUrl: string, connectorName: string): Promise<boolean> {
@@ -239,6 +265,8 @@ export const handler = async (): Promise<void> => {
     AutoRestartAttempted: 0,
     AutoRestartBudgetExceeded: 0,
   };
+  const connectorId = `${stage}:${connectorName}`;
+  let restartBudget = await getRestartBudget(restartTableName, connectorId);
 
   try {
     // Kafka Connect REST health
@@ -267,13 +295,45 @@ export const handler = async (): Promise<void> => {
           metrics.ConnectorTaskFailed = 1;
         } else {
           const payload = JSON.parse(statusRes.body) as ConnectorStatusResponse;
-          const connectorState = payload.connector?.state || 'UNKNOWN';
+          const summary = summarizeStatus(payload);
+          const connectorState = summary.connectorState;
           const tasks = payload.tasks || [];
-          if (connectorState !== 'RUNNING') {
-            metrics.ConnectorStateFailed = 1;
-          }
-          if (tasks.length === 0 || tasks.some((task) => task.state !== 'RUNNING')) {
-            metrics.ConnectorTaskFailed = 1;
+          const nonRunningTasks = tasks.filter((task) => (task.state || 'UNKNOWN') !== 'RUNNING');
+          const hasHardConnectorFailure = HARD_FAILURE_STATES.has(connectorState);
+          const hasHardTaskFailure = nonRunningTasks.some((task) =>
+            HARD_FAILURE_STATES.has(task.state || 'UNKNOWN')
+          );
+          const hasSoftStatusFailure =
+            connectorState !== 'RUNNING' || tasks.length === 0 || nonRunningTasks.length > 0;
+
+          console.log('Connector status summary', summary);
+
+          if (hasHardConnectorFailure || hasHardTaskFailure) {
+            if (connectorState !== 'RUNNING') {
+              metrics.ConnectorStateFailed = 1;
+            }
+            if (tasks.length === 0 || nonRunningTasks.length > 0) {
+              metrics.ConnectorTaskFailed = 1;
+            }
+            restartBudget.consecutiveSoftFailureCount = 0;
+          } else if (hasSoftStatusFailure) {
+            restartBudget.consecutiveSoftFailureCount += 1;
+            console.warn('Soft connector status failure observed', {
+              connectorId,
+              consecutiveSoftFailureCount: restartBudget.consecutiveSoftFailureCount,
+              confirmationThreshold: SOFT_FAILURE_CONFIRMATION_THRESHOLD,
+            });
+
+            if (restartBudget.consecutiveSoftFailureCount >= SOFT_FAILURE_CONFIRMATION_THRESHOLD) {
+              if (connectorState !== 'RUNNING') {
+                metrics.ConnectorStateFailed = 1;
+              }
+              if (tasks.length === 0 || nonRunningTasks.length > 0) {
+                metrics.ConnectorTaskFailed = 1;
+              }
+            }
+          } else {
+            restartBudget.consecutiveSoftFailureCount = 0;
           }
         }
       } catch (err) {
@@ -329,10 +389,7 @@ export const handler = async (): Promise<void> => {
       metrics.EcsServiceUnhealthy === 1;
 
     if (restartNeeded) {
-      const connectorId = `${stage}:${connectorName}`;
-      const budget = await getRestartBudget(restartTableName, connectorId);
-
-      if (budget.attemptCount >= MAX_RESTART_ATTEMPTS) {
+      if (restartBudget.attemptCount >= MAX_RESTART_ATTEMPTS) {
         metrics.AutoRestartBudgetExceeded = 1;
       } else {
         metrics.AutoRestartAttempted = 1;
@@ -341,16 +398,16 @@ export const handler = async (): Promise<void> => {
           console.log('Connector restart attempt result', {
             connectorName,
             restartSuccess,
-            attemptsInWindow: budget.attemptCount + 1,
+            attemptsInWindow: restartBudget.attemptCount + 1,
           });
         } catch (err) {
           console.error('Connector restart call failed', err);
         }
 
-        await saveRestartBudget(restartTableName, connectorId, {
-          windowStartEpochMs: budget.windowStartEpochMs,
-          attemptCount: budget.attemptCount + 1,
-        });
+        restartBudget = {
+          ...restartBudget,
+          attemptCount: restartBudget.attemptCount + 1,
+        };
       }
     }
 
@@ -363,6 +420,14 @@ export const handler = async (): Promise<void> => {
         ? 1
         : 0;
 
+    if (metrics.HealthCheckFailed === 0) {
+      restartBudget = {
+        ...restartBudget,
+        consecutiveSoftFailureCount: 0,
+      };
+    }
+
+    await saveRestartBudget(restartTableName, connectorId, restartBudget);
     await publishMetrics(metricNamespace, metrics);
     console.log('Health metrics published', metrics);
   } catch (err) {
