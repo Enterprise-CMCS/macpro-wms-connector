@@ -25,7 +25,7 @@
     "typescript": "^5.3.0"
   },
   "resolutions": {
-    "fast-xml-parser": "5.3.6"
+    "fast-xml-parser": "5.7.0"
   },
   "engines": {
     "node": ">=24"
