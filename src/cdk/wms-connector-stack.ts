@@ -1,6 +1,8 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import * as acmpca from 'aws-cdk-lib/aws-acmpca';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
@@ -10,6 +12,8 @@ import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as lambdaNodejs from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -218,15 +222,39 @@ export class WmsConnectorStack extends cdk.Stack {
       internetFacing: false,
       securityGroup: connectAlbSg,
       vpcSubnets: { subnets: vpc.privateSubnets },
+      dropInvalidHeaderFields: true,
     });
 
-    const connectListener = connectAlb.addListener('ConnectListener', {
-      port: 8083,
-      protocol: elbv2.ApplicationProtocol.HTTP,
+    const connectHostedZoneName = `wms-connector-${stage}.internal`;
+    const connectHostname = `connect.${connectHostedZoneName}`;
+    const connectHostedZone = new route53.PrivateHostedZone(this, 'ConnectHostedZone', {
+      zoneName: connectHostedZoneName,
+      vpc,
+    });
+    new route53.ARecord(this, 'ConnectAliasRecord', {
+      zone: connectHostedZone,
+      recordName: 'connect',
+      target: route53.RecordTarget.fromAlias(new route53Targets.LoadBalancerTarget(connectAlb)),
+    });
+    const connectCertificateAuthority = acmpca.CertificateAuthority.fromCertificateAuthorityArn(
+      this,
+      'ConnectCertificateAuthority',
+      fullConfig.connectAlbTls.certificateAuthorityArn
+    );
+    const connectCertificate = new acm.PrivateCertificate(this, 'ConnectCertificate', {
+      domainName: connectHostname,
+      certificateAuthority: connectCertificateAuthority,
+    });
+
+    const connectHttpsListener = connectAlb.addListener('ConnectHttpsListener', {
+      port: 443,
+      protocol: elbv2.ApplicationProtocol.HTTPS,
+      certificates: [connectCertificate],
+      sslPolicy: elbv2.SslPolicy.RECOMMENDED_TLS,
       open: false,
     });
 
-    connectListener.addTargets('ConnectTargets', {
+    connectHttpsListener.addTargets('ConnectTargets', {
       port: 8083,
       protocol: elbv2.ApplicationProtocol.HTTP,
       targets: [service],
@@ -245,8 +273,8 @@ export class WmsConnectorStack extends cdk.Stack {
     });
     connectAlbSg.connections.allowFrom(
       connectorLambdaSg,
-      ec2.Port.tcp(8083),
-      'Allow Lambda to call Connect ALB'
+      ec2.Port.tcp(443),
+      'Allow Lambda to call Connect ALB over HTTPS'
     );
 
     const healthLambdaSg = new ec2.SecurityGroup(this, 'HealthLambdaSg', {
@@ -256,9 +284,11 @@ export class WmsConnectorStack extends cdk.Stack {
     });
     connectAlbSg.connections.allowFrom(
       healthLambdaSg,
-      ec2.Port.tcp(8083),
-      'Allow health Lambda to call Connect ALB'
+      ec2.Port.tcp(443),
+      'Allow health Lambda to call Connect ALB over HTTPS'
     );
+    const connectUrl = `https://${connectHostname}`;
+    const connectTlsEnvironment = { CONNECT_CA_PEM: fullConfig.connectAlbTls.certificateAuthorityPem };
 
     const connectorHandler = new lambdaNodejs.NodejsFunction(this, 'ConnectRegistrar', {
       runtime: lambda.Runtime.NODEJS_24_X,
@@ -272,7 +302,8 @@ export class WmsConnectorStack extends cdk.Stack {
       vpcSubnets: { subnets: vpc.privateSubnets },
       securityGroups: [connectorLambdaSg],
       environment: {
-        CONNECT_URL: `http://${connectAlb.loadBalancerDnsName}:8083`,
+        CONNECT_URL: connectUrl,
+        ...connectTlsEnvironment,
         STAGE: stage,
         TOPIC_NAMESPACE: fullConfig.topicNamespace || '',
         CONNECTOR_NAME: 'wms-oracle-cdc',
@@ -306,7 +337,8 @@ export class WmsConnectorStack extends cdk.Stack {
       vpcSubnets: { subnets: vpc.privateSubnets },
       securityGroups: [healthLambdaSg],
       environment: {
-        CONNECT_URL: `http://${connectAlb.loadBalancerDnsName}:8083`,
+        CONNECT_URL: connectUrl,
+        ...connectTlsEnvironment,
         CONNECTOR_NAME: 'wms-oracle-cdc',
         STAGE: stage,
         CLUSTER_NAME: cluster.clusterName,
@@ -364,9 +396,9 @@ export class WmsConnectorStack extends cdk.Stack {
       },
     });
     connectorResource.node.addDependency(service);
-    connectorResource.node.addDependency(connectListener);
+    connectorResource.node.addDependency(connectHttpsListener);
     healthHandler.node.addDependency(service);
-    healthHandler.node.addDependency(connectListener);
+    healthHandler.node.addDependency(connectHttpsListener);
 
     const healthMetricNamespace = `${servicePrefix}/Health`;
     const healthMetricAlarmNames = [

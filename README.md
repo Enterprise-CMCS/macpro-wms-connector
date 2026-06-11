@@ -75,6 +75,21 @@ The CDK app loads environment secrets at synth/deploy time using stage-first fal
 - `mmdl/{stage}/brokerString` to `mmdl/default/brokerString`
 - `mmdl/{stage}/dbInfo` to `mmdl/default/dbInfo`
 - `mmdl/{stage}/alertEmails` to `mmdl/default/alertEmails`
+- `mmdl/{stage}/connectAlbTls` to `mmdl/default/connectAlbTls`
+
+`connectAlbTls` must be JSON with the private CA used to issue the internal ALB
+certificate and the CA certificate used by the connector lambdas to verify TLS:
+
+```json
+{
+  "certificateAuthorityArn": "arn:aws:acm-pca:us-east-1:<account-id>:certificate-authority/<ca-id>",
+  "certificateAuthorityPem": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"
+}
+```
+
+The stack creates a private `connect.wms-connector-<stage>.internal` DNS alias, issues
+a private ACM certificate for that hostname, exposes the Connect ALB on HTTPS 443 only,
+and drops invalid HTTP header fields.
 
 ## Deploy From Your Machine
 

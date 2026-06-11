@@ -206,6 +206,7 @@ The connector resolves secrets using a **stage-first, then default** pattern. Lo
 |---------------|-----------------------------------------------------------------------|---------|
 | **brokerString** | `mmdl/{stage}/brokerString` → `mmdl/default/brokerString`               | MSK bootstrap broker string for Kafka Connect. Default is available for main, val, production; stage-specific overrides when a different cluster is used. |
 | **dbInfo**    | `mmdl/{stage}/dbInfo` → `mmdl/default/dbInfo`                            | Oracle connection details. JSON object with fields required by the Debezium Oracle connector (e.g., host/IP, port, db/service name, user, password, schema). Create or verify these secrets per environment when CDC credentials are available. |
+| **connectAlbTls** | `mmdl/{stage}/connectAlbTls` → `mmdl/default/connectAlbTls`          | Internal Connect ALB TLS config. JSON object with `certificateAuthorityArn` and `certificateAuthorityPem`. The stack creates the private Connect DNS name, private ACM certificate, and HTTPS listener from this config. |
 
 Example **dbInfo** JSON shape (align with Debezium Oracle connector and Appian DbConfig where applicable):
 

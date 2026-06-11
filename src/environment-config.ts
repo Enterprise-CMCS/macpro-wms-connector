@@ -17,6 +17,8 @@ export const SecretPaths = {
   dbInfoDefault: 'mmdl/default/dbInfo',
   alertEmails: (stage: string) => `mmdl/${stage}/alertEmails`,
   alertEmailsDefault: 'mmdl/default/alertEmails',
+  connectAlbTls: (stage: string) => `mmdl/${stage}/connectAlbTls`,
+  connectAlbTlsDefault: 'mmdl/default/connectAlbTls',
 } as const;
 
 /**
@@ -41,6 +43,16 @@ export interface DbInfo {
   user: string;
   password: string;
   schema: string;
+}
+
+/**
+ * TLS configuration for the internal Kafka Connect ALB.
+ * certificateAuthorityArn issues the private ALB certificate.
+ * certificateAuthorityPem lets Lambda verify that private certificate.
+ */
+export interface ConnectAlbTlsConfig {
+  certificateAuthorityArn: string;
+  certificateAuthorityPem: string;
 }
 
 /**
@@ -111,6 +123,7 @@ export interface FullEnvironmentConfig extends EnvironmentConfig {
   iamPath: string;
   iamPermissionsBoundary: string;
   alertEmails: string[];
+  connectAlbTls: ConnectAlbTlsConfig;
 }
 
 /**
@@ -223,6 +236,41 @@ function parseAlertEmails(secretValue: string): string[] {
   return Array.from(new Set(emails));
 }
 
+function parseConnectAlbTlsConfig(secretValue: string): ConnectAlbTlsConfig {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(secretValue);
+  } catch {
+    throw new Error(
+      'connectAlbTls secret must be valid JSON with shape {"certificateAuthorityArn":"arn:...","certificateAuthorityPem":"-----BEGIN CERTIFICATE-----..."}'
+    );
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(
+      'connectAlbTls secret must be an object with shape {"certificateAuthorityArn":"arn:...","certificateAuthorityPem":"-----BEGIN CERTIFICATE-----..."}'
+    );
+  }
+
+  const { certificateAuthorityArn, certificateAuthorityPem } = parsed as {
+    certificateAuthorityArn?: unknown;
+    certificateAuthorityPem?: unknown;
+  };
+
+  if (typeof certificateAuthorityArn !== 'string' || certificateAuthorityArn.trim().length === 0) {
+    throw new Error('connectAlbTls secret is missing required string "certificateAuthorityArn".');
+  }
+
+  if (typeof certificateAuthorityPem !== 'string' || certificateAuthorityPem.trim().length === 0) {
+    throw new Error('connectAlbTls secret is missing required string "certificateAuthorityPem".');
+  }
+
+  return {
+    certificateAuthorityArn: certificateAuthorityArn.trim(),
+    certificateAuthorityPem: certificateAuthorityPem.trim(),
+  };
+}
+
 /**
  * Load secrets for an environment.
  * Uses fallback pattern: mmdl/{stage}/... -> mmdl/default/...
@@ -234,19 +282,28 @@ export async function loadEnvironmentSecrets(stage: string): Promise<{
   iamPath: string;
   iamPermissionsBoundary: string;
   alertEmails: string[];
+  connectAlbTls: ConnectAlbTlsConfig;
 }> {
-  const [vpcJson, brokerString, dbInfoJson, iamPath, iamPermissionsBoundary, alertEmailsJson] =
-    await Promise.all([
-      getSecretWithFallback(SecretPaths.vpc(stage), SecretPaths.vpcDefault),
-      getSecretWithFallback(SecretPaths.brokerString(stage), SecretPaths.brokerStringDefault),
-      getSecretWithFallback(SecretPaths.dbInfo(stage), SecretPaths.dbInfoDefault),
-      getSecretWithFallback(SecretPaths.iamPath(stage), SecretPaths.iamPathDefault),
-      getSecretWithFallback(
-        SecretPaths.iamPermissionsBoundary(stage),
-        SecretPaths.iamPermissionsBoundaryDefault
-      ),
-      getSecretWithFallback(SecretPaths.alertEmails(stage), SecretPaths.alertEmailsDefault),
-    ]);
+  const [
+    vpcJson,
+    brokerString,
+    dbInfoJson,
+    iamPath,
+    iamPermissionsBoundary,
+    alertEmailsJson,
+    connectAlbTlsJson,
+  ] = await Promise.all([
+    getSecretWithFallback(SecretPaths.vpc(stage), SecretPaths.vpcDefault),
+    getSecretWithFallback(SecretPaths.brokerString(stage), SecretPaths.brokerStringDefault),
+    getSecretWithFallback(SecretPaths.dbInfo(stage), SecretPaths.dbInfoDefault),
+    getSecretWithFallback(SecretPaths.iamPath(stage), SecretPaths.iamPathDefault),
+    getSecretWithFallback(
+      SecretPaths.iamPermissionsBoundary(stage),
+      SecretPaths.iamPermissionsBoundaryDefault
+    ),
+    getSecretWithFallback(SecretPaths.alertEmails(stage), SecretPaths.alertEmailsDefault),
+    getSecretWithFallback(SecretPaths.connectAlbTls(stage), SecretPaths.connectAlbTlsDefault),
+  ]);
   return {
     vpc: JSON.parse(vpcJson) as VpcConfig,
     brokerString,
@@ -254,6 +311,7 @@ export async function loadEnvironmentSecrets(stage: string): Promise<{
     iamPath,
     iamPermissionsBoundary,
     alertEmails: parseAlertEmails(alertEmailsJson),
+    connectAlbTls: parseConnectAlbTlsConfig(connectAlbTlsJson),
   };
 }
 

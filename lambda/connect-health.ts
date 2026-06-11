@@ -1,7 +1,8 @@
 import * as http from 'http';
+import * as https from 'https';
 import * as net from 'net';
 import { URL } from 'url';
-import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
+import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { DynamoDBClient, GetItemCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { DescribeServicesCommand, ECSClient } from '@aws-sdk/client-ecs';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
@@ -75,19 +76,29 @@ async function getSecretWithFallback(primary: string, fallback: string): Promise
 function request(connectUrl: string, path: string, method: string, body?: unknown): Promise<RequestResult> {
   return new Promise((resolve, reject) => {
     const base = new URL(connectUrl);
+    const isHttps = base.protocol === 'https:';
+    if (!isHttps && base.protocol !== 'http:') {
+      reject(new Error(`Unsupported Connect URL protocol: ${base.protocol}`));
+      return;
+    }
     const payload = body ? JSON.stringify(body) : null;
-    const req = http.request(
-      {
-        hostname: base.hostname,
-        port: base.port,
-        path,
-        method,
-        timeout: CONNECT_REQUEST_TIMEOUT_MS,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
-        },
+    const options: http.RequestOptions & https.RequestOptions = {
+      hostname: base.hostname,
+      port: base.port || (isHttps ? 443 : 80),
+      path,
+      method,
+      timeout: CONNECT_REQUEST_TIMEOUT_MS,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
       },
+    };
+    if (isHttps && process.env.CONNECT_CA_PEM) {
+      options.ca = process.env.CONNECT_CA_PEM.replace(/\\n/g, '\n');
+    }
+    const client = isHttps ? https : http;
+    const req = client.request(
+      options,
       (res) => {
         let data = '';
         res.on('data', (chunk) => (data += chunk));
@@ -149,6 +160,7 @@ async function getRestartBudget(tableName: string, connectorId: string): Promise
     return {
       windowStartEpochMs: now,
       attemptCount: 0,
+      consecutiveSoftFailureCount: 0,
     };
   }
 
@@ -229,7 +241,7 @@ async function publishMetrics(namespace: string, metrics: HealthMetrics): Promis
   const metricData = Object.entries(metrics).map(([MetricName, Value]) => ({
     MetricName,
     Value,
-    Unit: 'Count',
+    Unit: StandardUnit.Count,
   }));
 
   await cw.send(

@@ -1,4 +1,5 @@
 import * as http from 'http';
+import * as https from 'https';
 import * as net from 'net';
 import { URL } from 'url';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
@@ -37,16 +38,24 @@ type RequestResult = { statusCode?: number; body: string };
 function request(url: string, method: string, body?: unknown): Promise<RequestResult> {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
+    const isHttps = u.protocol === 'https:';
+    if (!isHttps && u.protocol !== 'http:') {
+      reject(new Error(`Unsupported Connect URL protocol: ${u.protocol}`));
+      return;
+    }
     const payload = body ? JSON.stringify(body) : null;
-    const options: http.RequestOptions = {
+    const options: http.RequestOptions & https.RequestOptions = {
       hostname: u.hostname,
-      port: u.port,
+      port: u.port || (isHttps ? 443 : 80),
       path: u.pathname + u.search,
       method,
       headers: {
         'Content-Type': 'application/json',
       },
     };
+    if (isHttps && process.env.CONNECT_CA_PEM) {
+      options.ca = process.env.CONNECT_CA_PEM.replace(/\\n/g, '\n');
+    }
     if (payload) {
       options.headers = {
         ...options.headers,
@@ -54,7 +63,8 @@ function request(url: string, method: string, body?: unknown): Promise<RequestRe
       };
     }
 
-    const req = http.request(options, (res) => {
+    const client = isHttps ? https : http;
+    const req = client.request(options, (res) => {
       let data = '';
       res.on('data', (chunk) => (data += chunk));
       res.on('end', () => {
