@@ -136,9 +136,9 @@ export const environmentConfigs: Record<NamedStage, EnvironmentConfig> = {
     stage: 'main',
     topicNamespace: '',
     taskCpu: '1024',
-    taskMemory: '2048',
+    taskMemory: '3072',
     connectContainerCpu: 512,
-    connectContainerMemory: 1024,
+    connectContainerMemory: 2560,
     instantClientContainerMemory: 512,
   },
   val: {
