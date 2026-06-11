@@ -255,6 +255,17 @@ export class WmsConnectorStack extends cdk.Stack {
       open: false,
     });
 
+    connectAlb.addListener('ConnectHttpRedirectListener', {
+      port: 8083,
+      protocol: elbv2.ApplicationProtocol.HTTP,
+      defaultAction: elbv2.ListenerAction.redirect({
+        protocol: 'HTTPS',
+        port: '443',
+        permanent: true,
+      }),
+      open: false,
+    });
+
     connectHttpsListener.addTargets('ConnectTargets', {
       port: 8083,
       protocol: elbv2.ApplicationProtocol.HTTP,
@@ -277,6 +288,11 @@ export class WmsConnectorStack extends cdk.Stack {
       ec2.Port.tcp(443),
       'Allow Lambda to call Connect ALB over HTTPS'
     );
+    connectAlbSg.connections.allowFrom(
+      connectorLambdaSg,
+      ec2.Port.tcp(8083),
+      'Allow Lambda to receive Connect ALB HTTP redirects'
+    );
 
     const healthLambdaSg = new ec2.SecurityGroup(this, 'HealthLambdaSg', {
       vpc,
@@ -287,6 +303,11 @@ export class WmsConnectorStack extends cdk.Stack {
       healthLambdaSg,
       ec2.Port.tcp(443),
       'Allow health Lambda to call Connect ALB over HTTPS'
+    );
+    connectAlbSg.connections.allowFrom(
+      healthLambdaSg,
+      ec2.Port.tcp(8083),
+      'Allow health Lambda to receive Connect ALB HTTP redirects'
     );
     const connectUrl = `https://${connectHostname}`;
     const connectTlsEnvironment = { CONNECT_CA_PEM: fullConfig.connectAlbTls.certificateAuthorityPem };
