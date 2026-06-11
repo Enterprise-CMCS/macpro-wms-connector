@@ -261,7 +261,7 @@ export class WmsConnectorStack extends cdk.Stack {
       targets: [service],
       healthCheck: {
         path: '/',
-        healthyHttpCodes: '200-399',
+        healthyHttpCodes: '200-499',
       },
     });
 
