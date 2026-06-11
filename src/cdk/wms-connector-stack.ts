@@ -197,6 +197,7 @@ export class WmsConnectorStack extends cdk.Stack {
       assignPublicIp: false,
       desiredCount: 1,
       enableExecuteCommand: true,
+      healthCheckGracePeriod: cdk.Duration.minutes(10),
     });
 
     const restartBudgetTable = new dynamodb.Table(this, 'RestartBudgetTable', {
