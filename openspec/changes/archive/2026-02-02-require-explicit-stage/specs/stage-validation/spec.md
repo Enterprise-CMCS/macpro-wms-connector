@@ -1,3 +1,5 @@
+## MODIFIED Requirements
+
 ### Requirement: Stage name is validated for topic and service naming
 
 The system SHALL validate the stage name before using it in Kafka topic names or CDK/ECS service names. Validation SHALL align with Kafka topic naming rules and CDK/ECS resource naming constraints. Invalid stage values SHALL be rejected (or normalized only if documented and safe); the system SHALL fail at synth or deploy with a clear error message when validation fails.
@@ -31,6 +33,8 @@ The system SHALL validate the stage name before using it in Kafka topic names or
 - **THEN** the system SHALL fail immediately with a clear error message
 - **AND** the error SHALL indicate that stage must be explicitly provided (e.g., "Stage is required. Use -c stage=main|val|production|<branch-name>")
 
+## ADDED Requirements
+
 ### Requirement: No default stage value
 
 The CDK app SHALL NOT define a default stage value. Stage MUST be explicitly provided via CDK context (`-c stage=<value>`) for every synth and deploy operation.
@@ -45,14 +49,3 @@ The CDK app SHALL NOT define a default stage value. Stage MUST be explicitly pro
 - **WHEN** stage is read from CDK context
 - **THEN** the code SHALL NOT provide a fallback value (no `|| 'main'` or similar)
 - **AND** missing stage SHALL trigger an explicit error
-
-### Requirement: Validation rules are documented
-
-The allowed stage pattern (regex or allow-list) and any normalization (e.g. slash to hyphen, lowercase) SHALL be documented in code or docs so that users know which branch names are valid and how invalid characters are handled (reject vs normalize).
-
-#### Scenario: Allowed pattern is documented
-
-- **GIVEN** a user or pipeline supplies a stage (e.g. Git branch name)
-- **WHEN** the user consults documentation or code comments for stage validation
-- **THEN** the allowed pattern (e.g. character set, length) SHALL be documented
-- **AND** behavior for invalid input (reject or normalize) SHALL be documented
