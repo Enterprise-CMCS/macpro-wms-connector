@@ -2,14 +2,35 @@ import { SecretsManager } from 'aws-sdk';
 
 /**
  * Secret path patterns for AWS Secrets Manager.
- * Fallback pattern: wms/{stage}/... -> wms/default/...
+ * Fallback pattern: mmdl/{stage}/... -> mmdl/default/...
  */
 export const SecretPaths = {
-  brokerString: (stage: string) => `wms/${stage}/brokerString`,
-  brokerStringDefault: 'wms/default/brokerString',
-  dbInfo: (stage: string) => `wms/${stage}/dbInfo`,
-  dbInfoDefault: 'wms/default/dbInfo',
+  vpc: (stage: string) => `mmdl/${stage}/vpc`,
+  vpcDefault: 'mmdl/default/vpc',
+  iamPath: (stage: string) => `mmdl/${stage}/iam/path`,
+  iamPathDefault: 'mmdl/default/iam/path',
+  iamPermissionsBoundary: (stage: string) => `mmdl/${stage}/iam/permissionsBoundary`,
+  iamPermissionsBoundaryDefault: 'mmdl/default/iam/permissionsBoundary',
+  brokerString: (stage: string) => `mmdl/${stage}/brokerString`,
+  brokerStringDefault: 'mmdl/default/brokerString',
+  dbInfo: (stage: string) => `mmdl/${stage}/dbInfo`,
+  dbInfoDefault: 'mmdl/default/dbInfo',
+  alertEmails: (stage: string) => `mmdl/${stage}/alertEmails`,
+  alertEmailsDefault: 'mmdl/default/alertEmails',
+  connectAlbTls: (stage: string) => `mmdl/${stage}/connectAlbTls`,
+  connectAlbTlsDefault: 'mmdl/default/connectAlbTls',
 } as const;
+
+/**
+ * VPC configuration structure from Secrets Manager.
+ * Same shape as appian-connector for consistency.
+ */
+export interface VpcConfig {
+  id: string;
+  dataSubnets: string[];
+  privateSubnets: string[];
+  publicSubnets: string[];
+}
 
 /**
  * Database configuration structure from Secrets Manager (Oracle).
@@ -22,6 +43,16 @@ export interface DbInfo {
   user: string;
   password: string;
   schema: string;
+}
+
+/**
+ * TLS configuration for the internal Kafka Connect ALB.
+ * certificateAuthorityArn issues the private ALB certificate.
+ * certificateAuthorityPem lets Lambda verify that private certificate.
+ */
+export interface ConnectAlbTlsConfig {
+  certificateAuthorityArn: string;
+  certificateAuthorityPem: string;
 }
 
 /**
@@ -86,8 +117,13 @@ export interface EnvironmentConfig {
  * Secrets are resolved at synth-time from AWS Secrets Manager.
  */
 export interface FullEnvironmentConfig extends EnvironmentConfig {
+  vpc: VpcConfig;
   brokerString: string;
   dbInfo: DbInfo;
+  iamPath: string;
+  iamPermissionsBoundary: string;
+  alertEmails: string[];
+  connectAlbTls: ConnectAlbTlsConfig;
 }
 
 /**
@@ -100,9 +136,9 @@ export const environmentConfigs: Record<NamedStage, EnvironmentConfig> = {
     stage: 'main',
     topicNamespace: '',
     taskCpu: '1024',
-    taskMemory: '2048',
+    taskMemory: '3072',
     connectContainerCpu: 512,
-    connectContainerMemory: 1024,
+    connectContainerMemory: 2560,
     instantClientContainerMemory: 512,
   },
   val: {
@@ -168,21 +204,114 @@ export async function getSecretWithFallback(
   }
 }
 
+function parseAlertEmails(secretValue: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(secretValue);
+  } catch {
+    throw new Error(
+      'alertEmails secret must be valid JSON with shape {"emails":["user1@example.com","user2@example.com"]}.'
+    );
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(
+      'alertEmails secret must be an object with shape {"emails":["user1@example.com","user2@example.com"]}.'
+    );
+  }
+
+  const emailsRaw = (parsed as { emails?: unknown }).emails;
+  if (!Array.isArray(emailsRaw)) {
+    throw new Error('alertEmails secret is missing required "emails" array.');
+  }
+
+  const emails = emailsRaw
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter((value) => value.length > 0);
+
+  if (emails.length === 0) {
+    throw new Error('alertEmails secret must contain at least one non-empty email address.');
+  }
+
+  return Array.from(new Set(emails));
+}
+
+function parseConnectAlbTlsConfig(secretValue: string): ConnectAlbTlsConfig {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(secretValue);
+  } catch {
+    throw new Error(
+      'connectAlbTls secret must be valid JSON with shape {"certificateAuthorityArn":"arn:...","certificateAuthorityPem":"-----BEGIN CERTIFICATE-----..."}'
+    );
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(
+      'connectAlbTls secret must be an object with shape {"certificateAuthorityArn":"arn:...","certificateAuthorityPem":"-----BEGIN CERTIFICATE-----..."}'
+    );
+  }
+
+  const { certificateAuthorityArn, certificateAuthorityPem } = parsed as {
+    certificateAuthorityArn?: unknown;
+    certificateAuthorityPem?: unknown;
+  };
+
+  if (typeof certificateAuthorityArn !== 'string' || certificateAuthorityArn.trim().length === 0) {
+    throw new Error('connectAlbTls secret is missing required string "certificateAuthorityArn".');
+  }
+
+  if (typeof certificateAuthorityPem !== 'string' || certificateAuthorityPem.trim().length === 0) {
+    throw new Error('connectAlbTls secret is missing required string "certificateAuthorityPem".');
+  }
+
+  return {
+    certificateAuthorityArn: certificateAuthorityArn.trim(),
+    certificateAuthorityPem: certificateAuthorityPem.trim(),
+  };
+}
+
 /**
  * Load secrets for an environment.
- * Uses fallback pattern: wms/{stage}/... -> wms/default/...
+ * Uses fallback pattern: mmdl/{stage}/... -> mmdl/default/...
  */
 export async function loadEnvironmentSecrets(stage: string): Promise<{
+  vpc: VpcConfig;
   brokerString: string;
   dbInfo: DbInfo;
+  iamPath: string;
+  iamPermissionsBoundary: string;
+  alertEmails: string[];
+  connectAlbTls: ConnectAlbTlsConfig;
 }> {
-  const [brokerString, dbInfoJson] = await Promise.all([
+  const [
+    vpcJson,
+    brokerString,
+    dbInfoJson,
+    iamPath,
+    iamPermissionsBoundary,
+    alertEmailsJson,
+    connectAlbTlsJson,
+  ] = await Promise.all([
+    getSecretWithFallback(SecretPaths.vpc(stage), SecretPaths.vpcDefault),
     getSecretWithFallback(SecretPaths.brokerString(stage), SecretPaths.brokerStringDefault),
     getSecretWithFallback(SecretPaths.dbInfo(stage), SecretPaths.dbInfoDefault),
+    getSecretWithFallback(SecretPaths.iamPath(stage), SecretPaths.iamPathDefault),
+    getSecretWithFallback(
+      SecretPaths.iamPermissionsBoundary(stage),
+      SecretPaths.iamPermissionsBoundaryDefault
+    ),
+    getSecretWithFallback(SecretPaths.alertEmails(stage), SecretPaths.alertEmailsDefault),
+    getSecretWithFallback(SecretPaths.connectAlbTls(stage), SecretPaths.connectAlbTlsDefault),
   ]);
   return {
+    vpc: JSON.parse(vpcJson) as VpcConfig,
     brokerString,
     dbInfo: JSON.parse(dbInfoJson) as DbInfo,
+    iamPath,
+    iamPermissionsBoundary,
+    alertEmails: parseAlertEmails(alertEmailsJson),
+    connectAlbTls: parseConnectAlbTlsConfig(connectAlbTlsJson),
   };
 }
 
