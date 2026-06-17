@@ -24,7 +24,7 @@ This connector is one pipeline in the broader connector platform, alongside **se
 - Stage validation for safe topic/resource naming.
 - Ephemeral topic namespacing for non-named stages.
 - Secrets fallback model: `mmdl/{stage}/...` to `mmdl/default/...`.
-- Dedicated alerting stack with SNS email subscriptions from Secrets Manager.
+- Dedicated alerting stack with optional SNS email subscriptions from Secrets Manager.
 - 10-minute health checks with CloudWatch metrics and alarms.
 - Restart-budget protection via DynamoDB (max 3 restart attempts per rolling 60 minutes).
 - EventBridge alerting for ECS task stop and ECS service error events.
@@ -65,7 +65,7 @@ This repository is infrastructure and deployment code. Local usage is primarily:
 
 It does not run a local Kafka Connect runtime by default.
 
-### Required Secrets (Synth/Deploy Time)
+### Secrets (Synth/Deploy Time)
 
 The CDK app loads environment secrets at synth/deploy time using stage-first fallback:
 
@@ -74,10 +74,13 @@ The CDK app loads environment secrets at synth/deploy time using stage-first fal
 - `mmdl/{stage}/iam/permissionsBoundary` to `mmdl/default/iam/permissionsBoundary`
 - `mmdl/{stage}/brokerString` to `mmdl/default/brokerString`
 - `mmdl/{stage}/dbInfo` to `mmdl/default/dbInfo`
+
+Optional environment capabilities use the same stage-first fallback. If absent, deploy still succeeds:
+
 - `mmdl/{stage}/alertEmails` to `mmdl/default/alertEmails`
 - `mmdl/{stage}/connectAlbTls` to `mmdl/default/connectAlbTls`
 
-`connectAlbTls` must be JSON with the private CA used to issue the internal ALB
+`connectAlbTls`, when configured, must be JSON with the private CA used to issue the internal ALB
 certificate and the CA certificate used by the connector lambdas to verify TLS:
 
 ```json
@@ -88,8 +91,9 @@ certificate and the CA certificate used by the connector lambdas to verify TLS:
 ```
 
 The stack creates a private `connect.wms-connector-<stage>.internal` DNS alias, issues
-a private ACM certificate for that hostname, exposes the Connect ALB on HTTPS 443 only,
-and drops invalid HTTP header fields.
+a private ACM certificate for that hostname, exposes the Connect ALB on HTTPS 443, and
+drops invalid HTTP header fields when `connectAlbTls` is configured. Without `connectAlbTls`,
+the stack keeps the Connect ALB internal and security-group restricted on HTTP 8083.
 
 ## Deploy From Your Machine
 
@@ -224,7 +228,7 @@ Notes:
    - `wms-connector-<stage>/Health`
    - `wms-connector-<stage>/ConnectorLogs`
 4. CloudWatch alarms and EventBridge ECS failure rules publish notifications to SNS.
-5. SNS sends email alerts to recipients from the `alertEmails` secret.
+5. SNS sends email alerts to recipients from the optional `alertEmails` secret when configured.
 
 ### Add Or Update Alert Email Recipients
 

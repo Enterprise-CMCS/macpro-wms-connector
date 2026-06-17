@@ -123,7 +123,7 @@ export interface FullEnvironmentConfig extends EnvironmentConfig {
   iamPath: string;
   iamPermissionsBoundary: string;
   alertEmails: string[];
-  connectAlbTls: ConnectAlbTlsConfig;
+  connectAlbTls?: ConnectAlbTlsConfig;
 }
 
 /**
@@ -190,17 +190,49 @@ async function getSecretValue(secretId: string): Promise<string> {
   throw new Error(`Secret ${secretId} not found or is binary`);
 }
 
+function isMissingSecretError(error: unknown): boolean {
+  const candidate = error as { code?: unknown; name?: unknown };
+  return (
+    candidate.code === 'ResourceNotFoundException' ||
+    candidate.name === 'ResourceNotFoundException'
+  );
+}
+
 /**
  * Try to get a secret with fallback to default.
  */
 export async function getSecretWithFallback(
   primarySecretId: string,
-  fallbackSecretId: string
+  fallbackSecretId: string,
+  loadSecretValue = getSecretValue
 ): Promise<string> {
   try {
-    return await getSecretValue(primarySecretId);
+    return await loadSecretValue(primarySecretId);
   } catch {
-    return await getSecretValue(fallbackSecretId);
+    return await loadSecretValue(fallbackSecretId);
+  }
+}
+
+async function getOptionalSecretWithFallback(
+  primarySecretId: string,
+  fallbackSecretId: string,
+  loadSecretValue = getSecretValue
+): Promise<string | undefined> {
+  try {
+    return await loadSecretValue(primarySecretId);
+  } catch (primaryError) {
+    if (!isMissingSecretError(primaryError)) {
+      throw primaryError;
+    }
+  }
+
+  try {
+    return await loadSecretValue(fallbackSecretId);
+  } catch (fallbackError) {
+    if (isMissingSecretError(fallbackError)) {
+      return undefined;
+    }
+    throw fallbackError;
   }
 }
 
@@ -282,17 +314,9 @@ export async function loadEnvironmentSecrets(stage: string): Promise<{
   iamPath: string;
   iamPermissionsBoundary: string;
   alertEmails: string[];
-  connectAlbTls: ConnectAlbTlsConfig;
+  connectAlbTls?: ConnectAlbTlsConfig;
 }> {
-  const [
-    vpcJson,
-    brokerString,
-    dbInfoJson,
-    iamPath,
-    iamPermissionsBoundary,
-    alertEmailsJson,
-    connectAlbTlsJson,
-  ] = await Promise.all([
+  const [vpcJson, brokerString, dbInfoJson, iamPath, iamPermissionsBoundary] = await Promise.all([
     getSecretWithFallback(SecretPaths.vpc(stage), SecretPaths.vpcDefault),
     getSecretWithFallback(SecretPaths.brokerString(stage), SecretPaths.brokerStringDefault),
     getSecretWithFallback(SecretPaths.dbInfo(stage), SecretPaths.dbInfoDefault),
@@ -301,17 +325,26 @@ export async function loadEnvironmentSecrets(stage: string): Promise<{
       SecretPaths.iamPermissionsBoundary(stage),
       SecretPaths.iamPermissionsBoundaryDefault
     ),
-    getSecretWithFallback(SecretPaths.alertEmails(stage), SecretPaths.alertEmailsDefault),
-    getSecretWithFallback(SecretPaths.connectAlbTls(stage), SecretPaths.connectAlbTlsDefault),
   ]);
+
+  const [alertEmailsJson, connectAlbTlsJson] = await Promise.all([
+    getOptionalSecretWithFallback(SecretPaths.alertEmails(stage), SecretPaths.alertEmailsDefault),
+    getOptionalSecretWithFallback(
+      SecretPaths.connectAlbTls(stage),
+      SecretPaths.connectAlbTlsDefault
+    ),
+  ]);
+
   return {
     vpc: JSON.parse(vpcJson) as VpcConfig,
     brokerString,
     dbInfo: JSON.parse(dbInfoJson) as DbInfo,
     iamPath,
     iamPermissionsBoundary,
-    alertEmails: parseAlertEmails(alertEmailsJson),
-    connectAlbTls: parseConnectAlbTlsConfig(connectAlbTlsJson),
+    alertEmails: alertEmailsJson ? parseAlertEmails(alertEmailsJson) : [],
+    connectAlbTls: connectAlbTlsJson
+      ? parseConnectAlbTlsConfig(connectAlbTlsJson)
+      : undefined,
   };
 }
 

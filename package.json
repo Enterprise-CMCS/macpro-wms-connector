@@ -6,6 +6,7 @@
   "scripts": {
     "preinstall": "node -e \"if (process.env.npm_config_user_agent && process.env.npm_config_user_agent.startsWith('npm/')) { console.error('This project uses Yarn. Use: yarn install'); process.exit(1); }\"",
     "build": "tsc",
+    "test": "yarn build && node --test test/*.test.cjs",
     "synth": "yarn build && yarn exec cdk synth",
     "cdk": "yarn build && yarn exec cdk"
   },
