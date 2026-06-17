@@ -18,9 +18,6 @@ export class WmsAlertsStack extends cdk.Stack {
     const alertEmails = Array.from(
       new Set(props.alertEmails.map((email) => email.trim()).filter((email) => email.length > 0))
     );
-    if (alertEmails.length === 0) {
-      throw new Error('At least one alert recipient email is required.');
-    }
 
     const alertsTopic = new sns.Topic(this, 'AlertsTopic', {
       topicName: `Alerts-wms-alerts-${props.stage}`,
