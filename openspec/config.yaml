@@ -24,7 +24,7 @@ context: |
   - Environments: main (dev environment, current branch), val, production
   - Ephemeral branches: Use stage name for namespacing (e.g., feature-xyz)
   - Service prefix pattern: wms-connector-{stage}
-  - Secrets path pattern: wms/{stage}/... with fallback to wms/default/...
+  - Secrets path pattern: mmdl/{stage}/... with fallback to mmdl/default/...
 
   Topic Namespacing:
   - Higher environments (dev/val/prod): No namespace prefix
@@ -57,7 +57,7 @@ rules:
   design:
     - Follow CDK patterns from macpro-appian-connector
     - Use environment-config.ts pattern for stage-based configuration
-    - Implement secrets fallback pattern (wms/{stage}/... -> wms/default/...)
+    - Implement secrets fallback pattern (mmdl/{stage}/... -> mmdl/default/...)
     - Include security group rules for Oracle (1521) and Kafka
     - Design for ephemeral branch topic cleanup
   tasks:

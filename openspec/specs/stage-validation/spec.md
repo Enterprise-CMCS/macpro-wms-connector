@@ -1,8 +1,8 @@
-## ADDED Requirements
-
 ### Requirement: Stage name is validated for topic and service naming
 
 The system SHALL validate the stage name before using it in Kafka topic names or CDK/ECS service names. Validation SHALL align with Kafka topic naming rules and CDK/ECS resource naming constraints. Invalid stage values SHALL be rejected (or normalized only if documented and safe); the system SHALL fail at synth or deploy with a clear error message when validation fails.
+
+**The stage parameter MUST be explicitly provided; no default value is allowed.**
 
 #### Scenario: Valid stage passes validation
 
@@ -24,6 +24,27 @@ The system SHALL validate the stage name before using it in Kafka topic names or
 - **WHEN** getEnvironmentConfig(stage) is called and stage is not main, val, or production
 - **THEN** the stage SHALL be validated before being used as topicNamespace or in service names
 - **AND** if validation fails, synth or deploy SHALL fail fast with a clear error rather than producing invalid topic or resource names later
+
+#### Scenario: Missing stage fails immediately
+
+- **WHEN** CDK synth or deploy is run without `-c stage=<value>`
+- **THEN** the system SHALL fail immediately with a clear error message
+- **AND** the error SHALL indicate that stage must be explicitly provided (e.g., "Stage is required. Use -c stage=main|val|production|<branch-name>")
+
+### Requirement: No default stage value
+
+The CDK app SHALL NOT define a default stage value. Stage MUST be explicitly provided via CDK context (`-c stage=<value>`) for every synth and deploy operation.
+
+#### Scenario: cdk.json has no default stage
+
+- **WHEN** `cdk.json` is read
+- **THEN** the context SHALL NOT contain a `stage` key with a default value
+
+#### Scenario: Code has no fallback stage
+
+- **WHEN** stage is read from CDK context
+- **THEN** the code SHALL NOT provide a fallback value (no `|| 'main'` or similar)
+- **AND** missing stage SHALL trigger an explicit error
 
 ### Requirement: Validation rules are documented
 
