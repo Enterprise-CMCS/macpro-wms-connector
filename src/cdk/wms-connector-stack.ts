@@ -33,6 +33,8 @@ export interface WmsConnectorStackProps extends cdk.StackProps {
  * VPC, IAM path, permissions boundary, and brokerString come from fullConfig (secrets) at synth time;
  * brokerString is passed as CONNECT_BOOTSTRAP_SERVERS. dbInfo is resolved at runtime by the CDC connector
  * config when registering the Debezium Oracle connector via the Connect REST API.
+ * Falcon cid, provisioning token, and image come from the shared crowdstrike/falcon secret.
+ * This stack reads that secret and does not create it.
  */
 export class WmsConnectorStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: WmsConnectorStackProps) {
@@ -135,6 +137,34 @@ export class WmsConnectorStack extends cdk.Stack {
       },
     });
 
+    const falconVolumeName = 'crowdstrike-falcon-volume';
+    taskDef.addVolume({ name: falconVolumeName });
+
+    const falconInit = taskDef.addContainer('crowdstrike-falcon-init-container', {
+      image: ecs.ContainerImage.fromRegistry(fullConfig.falcon.image),
+      essential: false,
+      user: '0:0',
+      readonlyRootFilesystem: true,
+      entryPoint: [
+        '/bin/bash',
+        '-c',
+        'chmod u+rwx /tmp/CrowdStrike && mkdir -p /tmp/CrowdStrike/rootfs/lib  && cp -r /bin /etc /lib64 /usr /entrypoint-ecs.sh /tmp/CrowdStrike/rootfs && chmod -R a=rX /tmp/CrowdStrike',
+      ],
+    });
+    falconInit.addMountPoints({
+      containerPath: '/tmp/CrowdStrike',
+      readOnly: false,
+      sourceVolume: falconVolumeName,
+    });
+
+    const connectLinuxParameters = new ecs.LinuxParameters(this, 'ConnectLinuxParameters');
+    connectLinuxParameters.addCapabilities(ecs.Capability.SYS_PTRACE);
+    const falconCtlOpts = [
+      `--provisioning-token=${fullConfig.falcon.provisioningToken}`,
+      `--tags=wms-connector,${stage},wms-connector-${stage}`,
+      `--cid=${fullConfig.falcon.cid}`,
+    ].join(' ');
+
     const container = taskDef.addContainer('connect', {
       image: ecs.ContainerImage.fromRegistry('confluentinc/cp-kafka-connect:6.0.9'),
       user: '0',
@@ -144,6 +174,14 @@ export class WmsConnectorStack extends cdk.Stack {
         logGroup: connectLogGroup,
         streamPrefix: `wms-connector-${stage}`,
       }),
+      entryPoint: [
+        '/tmp/CrowdStrike/rootfs/lib64/ld-linux-x86-64.so.2',
+        '--library-path',
+        '/tmp/CrowdStrike/rootfs/lib64',
+        '/tmp/CrowdStrike/rootfs/bin/bash',
+        '/tmp/CrowdStrike/rootfs/entrypoint-ecs.sh',
+      ],
+      linuxParameters: connectLinuxParameters,
       command: [
         'bash',
         '-c',
@@ -184,7 +222,17 @@ export class WmsConnectorStack extends cdk.Stack {
         CONNECT_SECURITY_PROTOCOL: 'SSL',
         STAGE: stage,
         TOPIC_NAMESPACE: fullConfig.topicNamespace,
+        FALCONCTL_OPTS: falconCtlOpts,
       },
+    });
+    container.addMountPoints({
+      containerPath: '/tmp/CrowdStrike',
+      readOnly: true,
+      sourceVolume: falconVolumeName,
+    });
+    container.addContainerDependencies({
+      container: falconInit,
+      condition: ecs.ContainerDependencyCondition.COMPLETE,
     });
     container.addPortMappings({ containerPort: 8083, protocol: ecs.Protocol.TCP });
 
