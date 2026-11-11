@@ -6,6 +6,7 @@ import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/c
 import { DynamoDBClient, GetItemCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { DescribeServicesCommand, ECSClient } from '@aws-sdk/client-ecs';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { ConnectorStatusResponse, planRestartPaths } from '../src/connect-restart-plan';
 
 const sm = new SecretsManagerClient({});
 const cw = new CloudWatchClient({});
@@ -26,12 +27,6 @@ type DbInfo = {
 };
 
 type RequestResult = { statusCode?: number; body: string };
-
-type ConnectorStatusResponse = {
-  name: string;
-  connector?: { state?: string };
-  tasks?: Array<{ id?: number; state?: string; trace?: string }>;
-};
 
 type RestartBudget = {
   windowStartEpochMs: number;
@@ -222,19 +217,19 @@ function summarizeStatus(payload: ConnectorStatusResponse) {
   };
 }
 
-async function attemptConnectorRestart(connectUrl: string, connectorName: string): Promise<boolean> {
-  const encodedName = encodeURIComponent(connectorName);
-  const restartRes = await request(
-    connectUrl,
-    `/connectors/${encodedName}/restart?includeTasks=true&onlyFailed=true`,
-    'POST'
-  );
-  if (isSuccessfulOrAccepted(restartRes.statusCode)) {
-    return true;
+async function attemptConnectorRestart(
+  connectUrl: string,
+  connectorName: string,
+  status: ConnectorStatusResponse | undefined
+): Promise<boolean> {
+  let allSucceeded = true;
+  for (const path of planRestartPaths(connectorName, status)) {
+    const res = await request(connectUrl, path, 'POST');
+    const succeeded = isSuccessfulOrAccepted(res.statusCode);
+    console.log('Connector restart request', { path, statusCode: res.statusCode, succeeded });
+    allSucceeded = allSucceeded && succeeded;
   }
-
-  const fallbackRes = await request(connectUrl, `/connectors/${encodedName}/tasks/0/restart`, 'POST');
-  return isSuccessfulOrAccepted(fallbackRes.statusCode);
+  return allSucceeded;
 }
 
 async function publishMetrics(namespace: string, metrics: HealthMetrics): Promise<void> {
@@ -279,6 +274,7 @@ export const handler = async (): Promise<void> => {
   };
   const connectorId = `${stage}:${connectorName}`;
   let restartBudget = await getRestartBudget(restartTableName, connectorId);
+  let connectorStatus: ConnectorStatusResponse | undefined;
 
   try {
     // Kafka Connect REST health
@@ -307,6 +303,7 @@ export const handler = async (): Promise<void> => {
           metrics.ConnectorTaskFailed = 1;
         } else {
           const payload = JSON.parse(statusRes.body) as ConnectorStatusResponse;
+          connectorStatus = payload;
           const summary = summarizeStatus(payload);
           const connectorState = summary.connectorState;
           const tasks = payload.tasks || [];
@@ -406,7 +403,11 @@ export const handler = async (): Promise<void> => {
       } else {
         metrics.AutoRestartAttempted = 1;
         try {
-          const restartSuccess = await attemptConnectorRestart(connectUrl, connectorName);
+          const restartSuccess = await attemptConnectorRestart(
+            connectUrl,
+            connectorName,
+            connectorStatus
+          );
           console.log('Connector restart attempt result', {
             connectorName,
             restartSuccess,

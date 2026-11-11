@@ -58,6 +58,7 @@ export class WmsConnectorStack extends cdk.Stack {
     const cluster = new ecs.Cluster(this, 'Cluster', {
       vpc,
       clusterName: `wms-connector-${stage}`,
+      containerInsightsV2: ecs.ContainerInsights.ENABLED,
     });
 
     const taskSg = new ec2.SecurityGroup(this, 'TaskSg', {

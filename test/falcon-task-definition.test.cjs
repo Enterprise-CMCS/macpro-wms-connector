@@ -64,6 +64,9 @@ test('renders the x86_64 Falcon sensor on the Connect task definition', () => {
   });
 
   const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::ECS::Cluster', {
+    ClusterSettings: [{ Name: 'containerInsights', Value: 'enabled' }],
+  });
   const tasks = template.findResources('AWS::ECS::TaskDefinition');
   assert.equal(Object.keys(tasks).length, 1);
   const task = Object.values(tasks)[0].Properties;
