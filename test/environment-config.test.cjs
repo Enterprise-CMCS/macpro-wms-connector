@@ -21,6 +21,11 @@ const baseSecrets = {
   'mmdl/val/iam/path': '/delegatedadmin/developer/',
   'mmdl/val/iam/permissionsBoundary':
     'arn:aws:iam::123456789012:policy/delegatedadmin/developer/boundary',
+  'crowdstrike/falcon': JSON.stringify({
+    cid: ' cid-placeholder ',
+    provisioningToken: ' token-placeholder ',
+    image: ' example.invalid/falcon-container:test ',
+  }),
 };
 
 function installSecretMap(secretMap) {
@@ -44,6 +49,11 @@ test('loads required config when optional alert and TLS secrets are missing', as
 
   assert.deepEqual(config.alertEmails, []);
   assert.equal(config.connectAlbTls, undefined);
+  assert.deepEqual(config.falcon, {
+    cid: 'cid-placeholder',
+    provisioningToken: 'token-placeholder',
+    image: 'example.invalid/falcon-container:test',
+  });
 });
 
 test('loads optional alert and TLS config when configured for a stage', async () => {
@@ -66,4 +76,24 @@ test('loads optional alert and TLS config when configured for a stage', async ()
       'arn:aws:acm-pca:us-east-1:123456789012:certificate-authority/00000000-0000-4000-8000-000000000000',
     certificateAuthorityPem: '-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----',
   });
+});
+
+test('rejects a missing or incomplete crowdstrike/falcon secret', async () => {
+  const { loadEnvironmentSecrets } = require('../lib/environment-config');
+  const { 'crowdstrike/falcon': _falcon, ...withoutFalcon } = baseSecrets;
+
+  installSecretMap(withoutFalcon);
+  await assert.rejects(() => loadEnvironmentSecrets('val'), /crowdstrike\/falcon/);
+
+  installSecretMap({
+    ...baseSecrets,
+    'crowdstrike/falcon': JSON.stringify({ cid: 'cid-placeholder', image: 'example.invalid/falcon:test' }),
+  });
+  await assert.rejects(() => loadEnvironmentSecrets('val'), /provisioningToken/);
+
+  installSecretMap({
+    ...baseSecrets,
+    'crowdstrike/falcon': 'not-json',
+  });
+  await assert.rejects(() => loadEnvironmentSecrets('val'), /valid JSON/);
 });
