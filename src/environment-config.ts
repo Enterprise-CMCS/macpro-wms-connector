@@ -19,6 +19,8 @@ export const SecretPaths = {
   alertEmailsDefault: 'mmdl/default/alertEmails',
   connectAlbTls: (stage: string) => `mmdl/${stage}/connectAlbTls`,
   connectAlbTlsDefault: 'mmdl/default/connectAlbTls',
+  /** Shared across stages. This repo reads the secret and does not create it. */
+  falcon: 'crowdstrike/falcon',
 } as const;
 
 /**
@@ -53,6 +55,15 @@ export interface DbInfo {
 export interface ConnectAlbTlsConfig {
   certificateAuthorityArn: string;
   certificateAuthorityPem: string;
+}
+
+/**
+ * CrowdStrike Falcon Container sensor settings from the shared crowdstrike/falcon secret.
+ */
+export interface FalconConfig {
+  cid: string;
+  provisioningToken: string;
+  image: string;
 }
 
 /**
@@ -124,6 +135,7 @@ export interface FullEnvironmentConfig extends EnvironmentConfig {
   iamPermissionsBoundary: string;
   alertEmails: string[];
   connectAlbTls?: ConnectAlbTlsConfig;
+  falcon: FalconConfig;
 }
 
 /**
@@ -303,9 +315,46 @@ function parseConnectAlbTlsConfig(secretValue: string): ConnectAlbTlsConfig {
   };
 }
 
+function requireFalconString(value: unknown, key: 'cid' | 'provisioningToken' | 'image'): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`crowdstrike/falcon secret is missing required string "${key}".`);
+  }
+  return value.trim();
+}
+
+function parseFalconConfig(secretValue: string): FalconConfig {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(secretValue);
+  } catch {
+    throw new Error(
+      'crowdstrike/falcon secret must be valid JSON with shape {"cid":"...","provisioningToken":"...","image":"..."}.'
+    );
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error(
+      'crowdstrike/falcon secret must be an object with shape {"cid":"...","provisioningToken":"...","image":"..."}.'
+    );
+  }
+
+  const { cid, provisioningToken, image } = parsed as {
+    cid?: unknown;
+    provisioningToken?: unknown;
+    image?: unknown;
+  };
+
+  return {
+    cid: requireFalconString(cid, 'cid'),
+    provisioningToken: requireFalconString(provisioningToken, 'provisioningToken'),
+    image: requireFalconString(image, 'image'),
+  };
+}
+
 /**
  * Load secrets for an environment.
  * Uses fallback pattern: mmdl/{stage}/... -> mmdl/default/...
+ * crowdstrike/falcon is shared across stages and has no fallback.
  */
 export async function loadEnvironmentSecrets(stage: string): Promise<{
   vpc: VpcConfig;
@@ -315,17 +364,20 @@ export async function loadEnvironmentSecrets(stage: string): Promise<{
   iamPermissionsBoundary: string;
   alertEmails: string[];
   connectAlbTls?: ConnectAlbTlsConfig;
+  falcon: FalconConfig;
 }> {
-  const [vpcJson, brokerString, dbInfoJson, iamPath, iamPermissionsBoundary] = await Promise.all([
-    getSecretWithFallback(SecretPaths.vpc(stage), SecretPaths.vpcDefault),
-    getSecretWithFallback(SecretPaths.brokerString(stage), SecretPaths.brokerStringDefault),
-    getSecretWithFallback(SecretPaths.dbInfo(stage), SecretPaths.dbInfoDefault),
-    getSecretWithFallback(SecretPaths.iamPath(stage), SecretPaths.iamPathDefault),
-    getSecretWithFallback(
-      SecretPaths.iamPermissionsBoundary(stage),
-      SecretPaths.iamPermissionsBoundaryDefault
-    ),
-  ]);
+  const [vpcJson, brokerString, dbInfoJson, iamPath, iamPermissionsBoundary, falconJson] =
+    await Promise.all([
+      getSecretWithFallback(SecretPaths.vpc(stage), SecretPaths.vpcDefault),
+      getSecretWithFallback(SecretPaths.brokerString(stage), SecretPaths.brokerStringDefault),
+      getSecretWithFallback(SecretPaths.dbInfo(stage), SecretPaths.dbInfoDefault),
+      getSecretWithFallback(SecretPaths.iamPath(stage), SecretPaths.iamPathDefault),
+      getSecretWithFallback(
+        SecretPaths.iamPermissionsBoundary(stage),
+        SecretPaths.iamPermissionsBoundaryDefault
+      ),
+      getSecretValue(SecretPaths.falcon),
+    ]);
 
   const [alertEmailsJson, connectAlbTlsJson] = await Promise.all([
     getOptionalSecretWithFallback(SecretPaths.alertEmails(stage), SecretPaths.alertEmailsDefault),
@@ -345,6 +397,7 @@ export async function loadEnvironmentSecrets(stage: string): Promise<{
     connectAlbTls: connectAlbTlsJson
       ? parseConnectAlbTlsConfig(connectAlbTlsJson)
       : undefined,
+    falcon: parseFalconConfig(falconJson),
   };
 }
 
